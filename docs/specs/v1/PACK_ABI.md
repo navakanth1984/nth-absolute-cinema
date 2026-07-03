@@ -67,6 +67,7 @@ CapabilityRegistry {
 PackDeclaration {
   pack_id: str
   pack_version: str
+  abi_version: str              # "1.0", pins PACK_ABI.md version
   capability_matrix: CapabilityMatrix
 }
 ```
