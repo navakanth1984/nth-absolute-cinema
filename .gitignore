@@ -31,6 +31,8 @@ __pycache__/
 *.pyc
 .venv/
 venv/
+*.egg-info/
+.pytest_cache/
 
 # Node (dashboard, later sprint)
 node_modules/

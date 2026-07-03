@@ -20,8 +20,11 @@ from engine.kernel.paths import PathResolver
 from engine.storage.db import init_db
 from engine.storage.knowledge_repo import KnowledgeRepo
 from engine.model_manager.ollama_provider import OllamaNotReachableError
+from engine.model_manager.orchestrator import LlmOrchestrator
 from engine.model_manager.resolver import resolve_provider
 from engine.model_manager.tts_provider import TtsProvider
+from engine.compilers.story_compiler import StoryCompiler
+from engine.compilers.screenplay_compiler import ScreenplayCompiler
 
 __all__ = ["Studio", "OllamaNotReachableError"]
 
@@ -48,20 +51,27 @@ class Studio:
         self._conn = init_db(db_path)
         self._repo = KnowledgeRepo(self._conn)
         self._provider = resolve_provider(ollama_model=model, force=provider_override)
+        self._orchestrator = LlmOrchestrator(self._provider)
         self._tts = TtsProvider()
 
-    def create_project(self, idea_text: str) -> str:
-        return self._repo.create_story(idea_text)
+    def create_project(self, idea_text: str, target_runtime_minutes: int = 15) -> str:
+        return self._repo.create_story(idea_text, target_runtime_minutes=target_runtime_minutes)
 
     def generate_story(self, project_id: str) -> str:
-        raise NotImplementedError(
-            "StoryCompiler not yet wired in - lands in Checkpoint B (Task 5)."
-        )
+        story = self._repo.get_story(project_id)
+        bible_text, _, metrics = StoryCompiler(self._orchestrator).run(story["idea_text"])
+        self._repo.save_story_bible(project_id, bible_text)
+        self._repo.save_compiler_metrics(project_id, "StoryCompiler", metrics)
+        return bible_text
 
     def generate_screenplay(self, project_id: str) -> str:
-        raise NotImplementedError(
-            "ScreenplayCompiler not yet wired in - lands in Checkpoint B (Task 6)."
+        story = self._repo.get_story(project_id)
+        screenplay_text, _, metrics = ScreenplayCompiler(self._orchestrator).run(
+            story["story_bible"], target_runtime_minutes=story["target_runtime_minutes"]
         )
+        self._repo.save_screenplay(project_id, screenplay_text)
+        self._repo.save_compiler_metrics(project_id, "ScreenplayCompiler", metrics)
+        return screenplay_text
 
     def generate_audio(self, project_id: str) -> Path:
         raise NotImplementedError(
