@@ -19,7 +19,8 @@ if str(_repo_root) not in sys.path:
 from engine.kernel.paths import PathResolver
 from engine.storage.db import init_db
 from engine.storage.knowledge_repo import KnowledgeRepo
-from engine.model_manager.ollama_provider import OllamaProvider, OllamaNotReachableError
+from engine.model_manager.ollama_provider import OllamaNotReachableError
+from engine.model_manager.resolver import resolve_provider
 from engine.model_manager.tts_provider import TtsProvider
 
 __all__ = ["Studio", "OllamaNotReachableError"]
@@ -35,7 +36,10 @@ class Studio:
     real right now versus what's coming, rather than silently no-op-ing.
     """
 
-    def __init__(self, model: str = "gemma2:9b") -> None:
+    def __init__(self, model: str = "gemma2:9b", provider_override: str | None = None) -> None:
+        """provider_override: "ollama" | "openrouter" | "mock" to bypass the
+        auto-detection fallback chain (Ollama -> OpenRouter -> Mock). Compilers never
+        see which provider was chosen - only Studio and resolve_provider() know."""
         resolver = PathResolver()
         start = Path(os.environ.get("NAC_ROOT_OVERRIDE", str(_repo_root)))
         self._root = resolver.find_root(start)
@@ -43,7 +47,7 @@ class Studio:
         db_path = resolver.resolve("projects/mvp.db")
         self._conn = init_db(db_path)
         self._repo = KnowledgeRepo(self._conn)
-        self._provider = OllamaProvider(model=model)
+        self._provider = resolve_provider(ollama_model=model, force=provider_override)
         self._tts = TtsProvider()
 
     def create_project(self, idea_text: str) -> str:
