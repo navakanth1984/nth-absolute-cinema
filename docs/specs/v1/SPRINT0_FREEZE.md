@@ -23,25 +23,25 @@
 
 ## Success criteria for Sprint 0
 
-- [ ] All 14 documents above exist under `E:\nth-absolute-cinema\docs\specs\v1\`,
+- [x] All 14 documents above exist under `E:\nth-absolute-cinema\docs\specs\v1\`,
   each marked FROZEN, each committed to git.
-- [ ] Zero placeholder/TBD text anywhere in `docs/specs/v1/` (verified by Task 13
+- [x] Zero placeholder/TBD text anywhere in `docs/specs/v1/` (verified by Task 13
   Step 1's consistency pass).
-- [ ] Every cross-document type reference resolves to exactly one canonical
+- [x] Every cross-document type reference resolves to exactly one canonical
   definition with matching field names (verified by Task 13 Step 1).
-- [ ] Sprint 0.5 validation (`SPRINT0.5-VALIDATION.md`) passed all 8
+- [x] Sprint 0.5 validation (`SPRINT0.5-VALIDATION.md`) passed all 8
   architecture-guarantee questions — replay, traceability, tool extensibility,
   machine portability, offline operation, generation reproducibility, independent
   compiler replacement, and independent graph evolution are each grounded YES, not
   asserted.
-- [ ] The `navakanth001` repo's original design doc
+- [x] The `navakanth001` repo's original design doc
   (`docs/superpowers/specs/2026-07-03-nth-absolute-cinema-design.md`) and this
   freeze do not contradict each other on any point — this freeze is the formal spec
   text for what that design doc already approved, not a redesign (verified by Task
   14).
-- [ ] `E:\nth-absolute-cinema\` exists as an initialized git repository with the
+- [x] `E:\nth-absolute-cinema\` exists as an initialized git repository with the
   full Task-1 directory scaffold present.
-- [ ] No engine code (Python modules under `engine/`) exists yet — Sprint 0 produces
+- [x] No engine code (Python modules under `engine/`) exists yet — Sprint 0 produces
   specs only.
 
 ## Non-goals for Sprint 0
