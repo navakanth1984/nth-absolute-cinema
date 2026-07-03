@@ -1,0 +1,41 @@
+# Cache tier — fully regeneratable, never versioned
+cache/*
+!cache/.gitkeep
+
+# Render outputs — regeneratable from provenance
+renders/*
+!renders/.gitkeep
+
+# Shared asset library — large binaries, not versioned
+assets/*
+!assets/.gitkeep
+
+# Scratch space
+temp/*
+!temp/.gitkeep
+
+# Local model weights — installed on demand, never versioned (see COMPUTE_MANAGER_SPEC.md)
+local_models/*
+!local_models/.gitkeep
+
+# Per-project data — SQLite DBs + project-tier assets, not versioned in the engine repo
+projects/*
+!projects/.gitkeep
+
+# Archive tier — exported .nac packages, cold storage
+archive/*
+!archive/.gitkeep
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Node (dashboard, later sprint)
+node_modules/
+dist/
+
+# OS
+Thumbs.db
+.DS_Store
