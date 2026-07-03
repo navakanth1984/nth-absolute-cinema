@@ -67,6 +67,12 @@ def create_project(body: dict):
     return {"id": project_id}
 
 
+@app.post("/api/projects/demo")
+def create_demo_project():
+    project_id = get_studio().create_demo_project()
+    return {"id": project_id}
+
+
 @app.get("/api/projects/{project_id}/status")
 def get_status(project_id: str):
     try:

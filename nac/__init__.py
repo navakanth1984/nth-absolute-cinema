@@ -102,11 +102,26 @@ class Studio:
         self._tts = TtsProvider()
 
     def _build_fallback_chain(self, model: str) -> FallbackProvider:
-        providers: list = [OllamaProvider(model=model)]
+        """Sprint 2A.2 fix: OllamaProvider's default generate() timeout is 120s
+        and OpenRouterProvider's is 90s - fine for a deliberately-chosen provider,
+        but disastrous here, where an unreachable Ollama used to make every
+        generate() call hang for up to two minutes before even trying the next
+        provider in the chain (observed live: an 8+ minute stall on a single
+        click). A fast reachability preflight (same pattern as resolver.py's
+        _ollama_reachable) skips Ollama entirely when it's not actually running,
+        and the fallback-chain's OpenRouter instance gets a much shorter timeout
+        than the default, since MockProvider is always one hop away as an
+        instant, guaranteed-to-succeed last resort."""
+        providers: list = []
         try:
-            providers.append(OpenRouterProvider())
+            if requests.get("http://localhost:11434/api/tags", timeout=1.5).status_code == 200:
+                providers.append(OllamaProvider(model=model))
+        except requests.RequestException:
+            pass  # Ollama not reachable - skip it instead of letting generate() hang on it
+        try:
+            providers.append(OpenRouterProvider(timeout_s=15.0))
         except OpenRouterNotConfiguredError:
-            pass  # no API key configured - Ollama and Mock are still in the chain
+            pass  # no API key configured - Mock is still in the chain
         providers.append(MockProvider())
 
         def on_fallback(provider, error: Exception) -> None:
@@ -118,6 +133,20 @@ class Studio:
 
     def create_project(self, idea_text: str, target_runtime_minutes: int = 15) -> str:
         return self._repo.create_story(idea_text, target_runtime_minutes=target_runtime_minutes)
+
+    def create_demo_project(self) -> str:
+        """Sprint 2A.2: seeds a bundled sample project (nac/demo_content.py) with
+        the Story Bible and Screenplay stages pre-filled - static text, not LLM
+        output, so a fresh install has something explorable with zero network
+        calls and zero generation cost. Audio/Motion Poster stay ungenerated so
+        the demo still demonstrates the review->generate workflow, not just a
+        read-only artifact."""
+        from nac.demo_content import DEMO_IDEA, DEMO_SCREENPLAY, DEMO_STORY_BIBLE
+
+        project_id = self.create_project(DEMO_IDEA, target_runtime_minutes=15)
+        self._repo.save_story_bible(project_id, DEMO_STORY_BIBLE)
+        self._repo.save_screenplay(project_id, DEMO_SCREENPLAY)
+        return project_id
 
     def generate_story(self, project_id: str) -> str:
         story = self._repo.get_story(project_id)

@@ -128,6 +128,19 @@ def test_capabilities_and_provider_routes(client):
     assert resp.json()["llm_provider"] == "MockProvider"
 
 
+def test_demo_project_route(client):
+    resp = client.post("/api/projects/demo")
+    assert resp.status_code == 200
+    project_id = resp.json()["id"]
+
+    status = client.get(f"/api/projects/{project_id}/status").json()
+    assert status["story_bible"] is True
+    assert status["screenplay"] is True
+
+    content = client.get(f"/api/projects/{project_id}/content").json()
+    assert "Temple of Varuna" in content["story"]
+
+
 def test_diagnostics_route(client):
     resp = client.get("/api/diagnostics")
     assert resp.status_code == 200

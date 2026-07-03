@@ -85,3 +85,28 @@ def test_get_audio_path_none_before_generation(tmp_path, monkeypatch):
     studio = _studio(tmp_path, monkeypatch)
     pid = studio.create_project("An idea")
     assert studio.get_audio_path(pid) is None
+
+
+def test_create_demo_project_seeds_story_and_screenplay(tmp_path, monkeypatch):
+    studio = _studio(tmp_path, monkeypatch)
+    pid = studio.create_demo_project()
+
+    status = studio.get_status(pid)
+    assert status["story_bible"] is True
+    assert status["screenplay"] is True
+    assert status["audio"] is False  # left ungenerated - demo shows the workflow, isn't a finished artifact
+
+    content = studio.get_stage_content(pid)
+    assert "Temple of Varuna" in content["story"]
+    assert "AMRITA" in content["screenplay"]
+
+    metrics = studio.get_metrics(pid)
+    assert metrics == []  # seeded directly, not via a compiler - no metrics recorded, honestly
+
+
+def test_demo_project_appears_in_list_projects(tmp_path, monkeypatch):
+    studio = _studio(tmp_path, monkeypatch)
+    pid = studio.create_demo_project()
+
+    projects = studio.list_projects()
+    assert any(p["id"] == pid for p in projects)

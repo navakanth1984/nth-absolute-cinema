@@ -89,6 +89,15 @@ document.getElementById("new-project-btn").onclick = () => {
   document.getElementById("np-runtime").value = "15";
   document.getElementById("new-project-dialog").classList.remove("hidden");
 };
+document.getElementById("demo-project-btn").onclick = async () => {
+  try {
+    const { id } = await api("/api/projects/demo", { method: "POST" });
+    toast("Demo project loaded");
+    openProject(id);
+  } catch (e) {
+    toast(e.message, true);
+  }
+};
 document.getElementById("np-cancel").onclick = () =>
   document.getElementById("new-project-dialog").classList.add("hidden");
 document.getElementById("np-create").onclick = async () => {
@@ -424,6 +433,7 @@ async function renderDiagnosticsWorkspace() {
 
 const COMMANDS = [
   { label: "Create Project", run: () => document.getElementById("new-project-btn").click() },
+  { label: "Load Demo Project", run: () => document.getElementById("demo-project-btn").click() },
   { label: "Generate Story", run: () => requireProject() && selectStage("story") },
   { label: "Generate Screenplay", run: () => requireProject() && selectStage("screenplay") },
   { label: "Generate Audio", run: () => requireProject() && selectStage("audio") },

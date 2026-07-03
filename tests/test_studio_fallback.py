@@ -2,27 +2,54 @@ from pathlib import Path
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import requests
+
 from nac import Studio
 from engine.model_manager.ollama_provider import OllamaNotReachableError, OllamaProvider
 
 
-def _studio_autodetect(tmp_path, monkeypatch):
+def test_autodetect_skips_ollama_when_preflight_unreachable(tmp_path, monkeypatch):
+    """No real Ollama server in the test environment -> the fast reachability
+    preflight (Sprint 2A.2) should skip Ollama entirely rather than adding it to
+    the chain and letting a later generate() call hang on its 120s timeout."""
     monkeypatch.setenv("NAC_ROOT_OVERRIDE", str(tmp_path))
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     (tmp_path / ".nac-root").write_text("")
-    # Force Ollama's generate() to fail deterministically regardless of whether
-    # a real Ollama server happens to be running in this environment - this test
-    # is about the fallback chain, not about live Ollama availability.
+
+    def _unreachable(*a, **kw):
+        raise requests.exceptions.ConnectionError("refused")
+
+    monkeypatch.setattr(requests, "get", _unreachable)
+    studio = Studio(provider_override=None)
+    pid = studio.create_project("An idea")
+
+    bible = studio.generate_story(pid)
+
+    assert "MOCK OUTPUT" in bible
+    info = studio.get_provider_info()
+    assert info["llm_provider"] == "MockProvider"
+    assert info["fallback_chain"] == ["MockProvider"]  # Ollama never added, no API key configured
+    assert info["fallback_events"] == []  # nothing to skip - Mock was the only candidate
+
+
+def test_autodetect_falls_through_to_mock_when_ollama_reachable_but_generation_fails(tmp_path, monkeypatch):
+    """Ollama passes the reachability preflight (e.g. server up but the specific
+    model isn't pulled) - the chain should still fall through to Mock on the
+    actual generate() failure, and record the fallback event."""
+    monkeypatch.setenv("NAC_ROOT_OVERRIDE", str(tmp_path))
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    (tmp_path / ".nac-root").write_text("")
+
+    class _FakeResponse:
+        status_code = 200
+
+    monkeypatch.setattr(requests, "get", lambda *a, **kw: _FakeResponse())
     monkeypatch.setattr(
         OllamaProvider,
         "generate",
-        lambda self, prompt, system="": (_ for _ in ()).throw(OllamaNotReachableError("not running")),
+        lambda self, prompt, system="": (_ for _ in ()).throw(OllamaNotReachableError("model not pulled")),
     )
-    return Studio(provider_override=None)
-
-
-def test_autodetect_falls_through_to_mock_when_ollama_unreachable(tmp_path, monkeypatch):
-    studio = _studio_autodetect(tmp_path, monkeypatch)
+    studio = Studio(provider_override=None)
     pid = studio.create_project("An idea")
 
     bible = studio.generate_story(pid)
