@@ -163,3 +163,14 @@ class Studio:
 
     def get_assets(self, project_id: str) -> list[dict]:
         return self._repo.get_assets(project_id)
+
+    def get_stage_content(self, project_id: str) -> dict:
+        """Checkpoint C.5: public read-only access to each stage's current content,
+        for a review UI (CLI's `nac review`, or a future GUI) to display without
+        reaching into repo/storage internals directly."""
+        story = self._repo.get_story(project_id)
+        return {
+            "story": story["story_bible"],
+            "screenplay": story["screenplay"],
+            "prompt": story["motion_poster_prompt"],
+        }
