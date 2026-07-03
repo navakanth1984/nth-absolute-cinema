@@ -76,3 +76,56 @@ class KnowledgeRepo:
             (prompt_text, story_id),
         )
         self._conn.commit()
+
+    def get_status(self, story_id: str) -> dict:
+        """Checkpoint C.5: which stages are populated for a project - the basis for
+        partial-compilation/regeneration decisions (a caller checks status before
+        deciding what to (re)generate, rather than always running all six steps)."""
+        story = self.get_story(story_id)
+        return {
+            "story_id": story_id,
+            "idea": bool(story["idea_text"]),
+            "story_bible": bool(story["story_bible"]),
+            "screenplay": bool(story["screenplay"]),
+            "audio": bool(story["audio_path"]),
+            "motion_poster_prompt": bool(story["motion_poster_prompt"]),
+            "asset_count": len(self.get_assets(story_id)),
+            "review_count": len(self.get_reviews(story_id)),
+        }
+
+    def record_review(
+        self, story_id: str, stage: str, verdict: str, comment: str | None = None
+    ) -> None:
+        self._conn.execute(
+            "INSERT INTO review_log (id, story_id, stage, verdict, comment) VALUES (?, ?, ?, ?, ?)",
+            (str(uuid.uuid4()), story_id, stage, verdict, comment),
+        )
+        self._conn.commit()
+
+    def get_reviews(self, story_id: str) -> list[dict]:
+        rows = self._conn.execute(
+            "SELECT stage, verdict, comment, created_at FROM review_log "
+            "WHERE story_id = ? ORDER BY created_at",
+            (story_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def import_asset(
+        self, story_id: str, capability: str, file_path: str, content_hash: str
+    ) -> str:
+        asset_id = str(uuid.uuid4())
+        self._conn.execute(
+            "INSERT INTO assets (id, story_id, capability, file_path, content_hash) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (asset_id, story_id, capability, file_path, content_hash),
+        )
+        self._conn.commit()
+        return asset_id
+
+    def get_assets(self, story_id: str) -> list[dict]:
+        rows = self._conn.execute(
+            "SELECT id, capability, file_path, content_hash, source, created_at "
+            "FROM assets WHERE story_id = ? ORDER BY created_at",
+            (story_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]

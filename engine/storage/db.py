@@ -25,6 +25,25 @@ CREATE TABLE IF NOT EXISTS compiler_metrics (
     metrics_json TEXT NOT NULL,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+CREATE TABLE IF NOT EXISTS review_log (
+    id TEXT PRIMARY KEY,
+    story_id TEXT NOT NULL REFERENCES story(id),
+    stage TEXT NOT NULL,
+    verdict TEXT NOT NULL,
+    comment TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS assets (
+    id TEXT PRIMARY KEY,
+    story_id TEXT NOT NULL REFERENCES story(id),
+    capability TEXT NOT NULL,
+    file_path TEXT NOT NULL,
+    content_hash TEXT NOT NULL,
+    source TEXT NOT NULL DEFAULT 'manual_import',
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 """
 
 
