@@ -5,12 +5,24 @@ Consumers (the CLI, agent_os/filmmaking/nac_bridge.py) see only Studio - never
 engine.knowledge, engine.compilers, engine.storage, or engine.model_manager
 directly. `from nac.compilers...` / `from nac.storage...` are never supported
 imports - only `from nac import Studio, OllamaNotReachableError` is public API.
+
+VERSIONED PUBLIC INTERFACE (as of Checkpoint C.5, 2026-07-03): from this point on,
+`.nac`/Production Package layout, the Knowledge Graph schema (engine.storage.db.SCHEMA),
+compiler contracts (engine.compilers.base.CompilerBase), and this Studio SDK's public
+method signatures are treated as versioned interfaces - new fields/methods are
+additive (backward compatible); removing or renaming an existing field/method is a
+breaking change requiring a version bump (SDK_VERSION below), mirroring
+VERSIONING_POLICY.md's semver rules for the frozen v1.0 specs. No such bump has
+happened yet - SDK_VERSION 0.1.0 is Checkpoint C.5's baseline going forward.
 """
 from __future__ import annotations
 
+import hashlib
 import os
 import sys
 from pathlib import Path
+
+SDK_VERSION = "0.1.0"
 
 _repo_root = Path(__file__).resolve().parent
 if str(_repo_root) not in sys.path:
@@ -29,7 +41,14 @@ from engine.compilers.audio_compiler import AudioCompiler
 from engine.compilers.prompt_compiler import PromptCompiler
 from engine.portability.export import export_project
 
-__all__ = ["Studio", "OllamaNotReachableError"]
+__all__ = ["Studio", "OllamaNotReachableError", "SDK_VERSION"]
+
+_STAGE_DISPATCH = {
+    "story": "generate_story",
+    "screenplay": "generate_screenplay",
+    "audio": "generate_audio",
+    "prompt": "generate_prompt",
+}
 
 
 class Studio:
@@ -92,6 +111,55 @@ class Studio:
         return prompt_text
 
     def export(self, project_id: str, out_dir: Path) -> Path:
+        """Incremental by construction: exports whatever stages are populated right
+        now (export_project handles None/missing fields), so a caller may export
+        after any subset of stages - not only once all six are complete."""
         story = self._repo.get_story(project_id)
         metrics = self._repo.get_compiler_metrics(project_id)
         return export_project(story, metrics, Path(out_dir))
+
+    def get_status(self, project_id: str) -> dict:
+        """Checkpoint C.5: partial-compilation support - shows which stages are
+        populated so a caller can decide what to run next, rather than assuming the
+        full six-step pipeline always runs in one shot."""
+        return self._repo.get_status(project_id)
+
+    def regenerate_stage(self, project_id: str, stage: str) -> str | Path:
+        """Checkpoint C.5: targeted regeneration - re-runs exactly one stage
+        ("story"|"screenplay"|"audio"|"prompt") against the project's current graph
+        state, overwriting only that stage's saved output. This is the same
+        generate_*() method a full pipeline run calls; the only thing new is naming
+        it by stage string for CLI/caller convenience."""
+        if stage not in _STAGE_DISPATCH:
+            raise ValueError(f"Unknown stage '{stage}'. Valid stages: {list(_STAGE_DISPATCH)}")
+        method = getattr(self, _STAGE_DISPATCH[stage])
+        return method(project_id)
+
+    def record_review(
+        self, project_id: str, stage: str, verdict: str, comment: str | None = None
+    ) -> None:
+        """Checkpoint C.5: stage-by-stage director review. verdict is free-form but
+        conventionally one of "approved"/"needs_revision"/"rejected", matching
+        CREATIVE_GRAPH_SPEC.md sec 7's ReviewEntry.verdict values (full ReviewGraph
+        persistence remains Sprint 2+; this is the Sprint 1 subset: a flat log per
+        project, not a graph node)."""
+        self._repo.record_review(project_id, stage, verdict, comment=comment)
+
+    def get_reviews(self, project_id: str) -> list[dict]:
+        return self._repo.get_reviews(project_id)
+
+    def import_asset(self, project_id: str, capability: str, file_path: Path | str) -> str:
+        """Checkpoint C.5: asset import for UI-only providers (Google Flow, Google
+        Flow Music - capability_registry entries with execution_mode=UI). The
+        workflow is: generate manually in the provider's UI -> download the file ->
+        import_asset() hashes it and records it against this project, closing the
+        loop between a prompt package NAC generated and the asset a human produced
+        from it, without NAC needing a real API integration to that provider."""
+        file_path = Path(file_path)
+        if not file_path.is_file():
+            raise FileNotFoundError(f"No file at {file_path} to import")
+        content_hash = hashlib.sha256(file_path.read_bytes()).hexdigest()
+        return self._repo.import_asset(project_id, capability, str(file_path), content_hash)
+
+    def get_assets(self, project_id: str) -> list[dict]:
+        return self._repo.get_assets(project_id)
