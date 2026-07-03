@@ -16,8 +16,9 @@ import os
 import tempfile
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, UploadFile
-from fastapi.responses import FileResponse
+import requests
+from fastapi import FastAPI, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from nac import Studio
@@ -34,6 +35,19 @@ def get_studio() -> Studio:
 
 
 app = FastAPI(title="NAC Director Studio")
+
+
+@app.exception_handler(requests.exceptions.HTTPError)
+async def llm_provider_error_handler(request: Request, exc: requests.exceptions.HTTPError):
+    """Provider failures (e.g. OpenRouter free-tier 429 rate limits) previously
+    propagated as a bare, unhandled 500 with no message - indistinguishable in the
+    UI from a real click/JS bug. Surface the actual cause instead."""
+    status = exc.response.status_code if exc.response is not None else 502
+    if status == 429:
+        detail = "The LLM provider rate-limited this request (HTTP 429 - too many requests, likely the OpenRouter free tier). Wait a moment and try again, or switch provider."
+    else:
+        detail = f"The LLM provider returned an error: {exc}"
+    return JSONResponse(status_code=502, content={"detail": detail})
 
 _STATIC_DIR = Path(__file__).parent / "static"
 

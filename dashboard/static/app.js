@@ -36,7 +36,9 @@ function toast(msg, isError = false) {
   const t = document.getElementById("toast");
   t.textContent = msg;
   t.className = "toast" + (isError ? " error" : "");
-  setTimeout(() => t.classList.add("hidden"), 3500);
+  t.classList.remove("hidden");
+  clearTimeout(toast._hideTimer);
+  toast._hideTimer = setTimeout(() => t.classList.add("hidden"), isError ? 12000 : 3500);
 }
 
 // ---------- Home view ----------
@@ -268,7 +270,9 @@ async function renderGenerativeStageWorkspace(stageId) {
       selectStage(stageId);
     } catch (e) {
       toast(e.message, true);
-      document.getElementById("gen-btn").disabled = false;
+      const btn = document.getElementById("gen-btn");
+      btn.disabled = false;
+      btn.textContent = done ? "Regenerate" : "Generate";
     }
   };
 
