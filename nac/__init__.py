@@ -25,6 +25,9 @@ from engine.model_manager.resolver import resolve_provider
 from engine.model_manager.tts_provider import TtsProvider
 from engine.compilers.story_compiler import StoryCompiler
 from engine.compilers.screenplay_compiler import ScreenplayCompiler
+from engine.compilers.audio_compiler import AudioCompiler
+from engine.compilers.prompt_compiler import PromptCompiler
+from engine.portability.export import export_project
 
 __all__ = ["Studio", "OllamaNotReachableError"]
 
@@ -61,7 +64,7 @@ class Studio:
         story = self._repo.get_story(project_id)
         bible_text, _, metrics = StoryCompiler(self._orchestrator).run(story["idea_text"])
         self._repo.save_story_bible(project_id, bible_text)
-        self._repo.save_compiler_metrics(project_id, "StoryCompiler", metrics)
+        self._repo.save_compiler_metrics(project_id, metrics["compiler"], metrics)
         return bible_text
 
     def generate_screenplay(self, project_id: str) -> str:
@@ -70,20 +73,25 @@ class Studio:
             story["story_bible"], target_runtime_minutes=story["target_runtime_minutes"]
         )
         self._repo.save_screenplay(project_id, screenplay_text)
-        self._repo.save_compiler_metrics(project_id, "ScreenplayCompiler", metrics)
+        self._repo.save_compiler_metrics(project_id, metrics["compiler"], metrics)
         return screenplay_text
 
     def generate_audio(self, project_id: str) -> Path:
-        raise NotImplementedError(
-            "AudioCompiler not yet wired in - lands in Checkpoint C (Task 9)."
-        )
+        story = self._repo.get_story(project_id)
+        audio_out = self._resolver.resolve(f"projects/{project_id}_audio.wav")
+        audio_path, _, metrics = AudioCompiler(self._tts).run(story["screenplay"], audio_out)
+        self._repo.save_audio_path(project_id, str(audio_path))
+        self._repo.save_compiler_metrics(project_id, metrics["compiler"], metrics)
+        return audio_path
 
     def generate_prompt(self, project_id: str) -> str:
-        raise NotImplementedError(
-            "PromptCompiler not yet wired in - lands in Checkpoint C (Task 10)."
-        )
+        story = self._repo.get_story(project_id)
+        prompt_text, _, metrics = PromptCompiler(self._orchestrator).run(story["screenplay"])
+        self._repo.save_motion_poster_prompt(project_id, prompt_text)
+        self._repo.save_compiler_metrics(project_id, metrics["compiler"], metrics)
+        return prompt_text
 
     def export(self, project_id: str, out_dir: Path) -> Path:
-        raise NotImplementedError(
-            "Export not yet wired in - lands in Checkpoint C (Task 11)."
-        )
+        story = self._repo.get_story(project_id)
+        metrics = self._repo.get_compiler_metrics(project_id)
+        return export_project(story, metrics, Path(out_dir))
