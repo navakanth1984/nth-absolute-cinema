@@ -20,7 +20,7 @@ these three either belongs in `engine.kernel` (core) or is out of scope for Phas
 |---|---|
 | A Pack built against Pack ABI v1.0 works with any Compiler ABI v1.x | Packs depend only on `PlatformTarget`/`Shot` types, which are graph-spec, not compiler-ABI, concerns |
 | A Compiler built against Compiler ABI v1.0 continues to run against Creative Graph Spec v1.x (minor bumps) | Minor graph-spec bumps are additive only (`VERSIONING_POLICY.md`) |
-| A `.nac` package exported at graph-spec v1.0 imports cleanly into a NAC installation running graph-spec v1.x for any x ≥ 0 | Forward compatibility within a major version is required; see `VERSIONING_POLICY.md` §.nac compatibility |
+| A `.nac` package exported at graph-spec v1.0 imports cleanly into a NAC installation running graph-spec v1.x for any x ≥ 0 | Forward compatibility within a major version is required; see `VERSIONING_POLICY.md` §`.nac` package versioning |
 | A Plugin built against Plugin ABI v1.0 continues to receive events under Event Spec v1.x | Event taxonomy additions are minor-version, not breaking |
 
 ## Non-goals for extensibility (Phase 1)
