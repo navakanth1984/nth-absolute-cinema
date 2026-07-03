@@ -13,6 +13,7 @@ const STAGES = [
   { id: "reviews", label: "Reviews", real: true },
   { id: "assets", label: "Assets", real: true },
   { id: "settings", label: "Settings", real: true },
+  { id: "diagnostics", label: "Diagnostics", real: true },
   { id: "characters", label: "Characters (Coming Soon)", real: false },
   { id: "scenes", label: "Scenes (Coming Soon)", real: false },
   { id: "shots", label: "Shots (Coming Soon)", real: false },
@@ -212,6 +213,7 @@ async function selectStage(stageId) {
   if (stageId === "reviews") return renderReviewsWorkspace();
   if (stageId === "assets") return renderAssetsWorkspace();
   if (stageId === "settings") return renderSettingsWorkspace();
+  if (stageId === "diagnostics") return renderDiagnosticsWorkspace();
   return renderGenerativeStageWorkspace(stageId);
 }
 
@@ -378,6 +380,43 @@ async function renderSettingsWorkspace() {
       Higgsfield, Runway) are not yet registered - see the Sprint 2A report.
       Target Platforms, Aspect Ratios, Quality Target, and Execution Mode are not
       configurable here because the engine has no such settings yet.
+    </p>`;
+}
+
+async function renderDiagnosticsWorkspace() {
+  const ws = document.getElementById("stage-workspace");
+  ws.innerHTML = `<h2>Diagnostics</h2><p style="color:var(--text-dim);font-size:12px;">Checking...</p>`;
+  let d;
+  try {
+    d = await api("/api/diagnostics");
+  } catch (e) {
+    ws.innerHTML = `<h2>Diagnostics</h2><p style="color:var(--red);font-size:13px;">Failed to load diagnostics: ${escapeHtml(e.message)}</p>`;
+    return;
+  }
+  const row = (label, value, ok) => `<div class="info-row"><span>${label}</span><span class="v" style="color:${ok === undefined ? "var(--gold)" : ok ? "var(--green)" : "var(--red)"}">${escapeHtml(String(value))}</span></div>`;
+  ws.innerHTML = `
+    <h2>Diagnostics</h2>
+    <div class="section-title">System</div>
+    ${row("Python", d.python_version)}
+    ${row("SDK version", d.sdk_version)}
+    ${row("SQLite", d.sqlite, d.sqlite === "ok")}
+    ${row("Disk free", d.disk ? `${d.disk.free_gb} GB / ${d.disk.total_gb} GB` : "unknown")}
+    ${row("GPU", d.gpu)}
+    <div class="section-title">LLM Providers</div>
+    ${row("Ollama", d.ollama, d.ollama === "reachable")}
+    ${row("OpenRouter", d.openrouter, d.openrouter === "configured")}
+    ${row("Active provider (last call)", d.provider.llm_provider)}
+    ${d.provider.fallback_chain ? row("Fallback chain", d.provider.fallback_chain.join(" → ")) : ""}
+    ${d.provider.fallback_events && d.provider.fallback_events.length ? `
+      <div class="section-title">Fallback Events (this session)</div>
+      ${d.provider.fallback_events.map((e) => `<div class="history-item verdict-needs_revision">${escapeHtml(e.skipped_provider)} skipped: ${escapeHtml(e.error)}</div>`).join("")}
+    ` : ""}
+    <div class="section-title">Capabilities (Registry - display only)</div>
+    ${d.capabilities.map((c) => row(`${c.capability} (${c.provider_id})`, c.available ? "available" : "not integrated", c.available)).join("")}
+    <p style="font-size:11px;color:var(--text-dim);margin-top:14px;line-height:1.5;">
+      Every field above is a live check, not a placeholder. "unknown" means the
+      value genuinely could not be detected (e.g. no nvidia-smi found for GPU) -
+      it is never a guessed value.
     </p>`;
 }
 

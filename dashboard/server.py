@@ -108,6 +108,11 @@ def get_provider():
     return get_studio().get_provider_info()
 
 
+@app.get("/api/diagnostics")
+def get_diagnostics():
+    return get_studio().get_diagnostics()
+
+
 _VALID_STAGES = ("story", "screenplay", "audio", "prompt")
 
 

@@ -19,8 +19,13 @@ from __future__ import annotations
 
 import hashlib
 import os
+import platform
+import shutil
+import subprocess
 import sys
 from pathlib import Path
+
+import requests
 
 SDK_VERSION = "0.1.0"
 
@@ -31,7 +36,13 @@ if str(_repo_root) not in sys.path:
 from engine.kernel.paths import PathResolver
 from engine.storage.db import init_db
 from engine.storage.knowledge_repo import KnowledgeRepo
-from engine.model_manager.ollama_provider import OllamaNotReachableError
+from engine.model_manager.fallback_provider import FallbackProvider
+from engine.model_manager.mock_provider import MockProvider
+from engine.model_manager.ollama_provider import OllamaNotReachableError, OllamaProvider
+from engine.model_manager.openrouter_provider import (
+    OpenRouterNotConfiguredError,
+    OpenRouterProvider,
+)
 from engine.model_manager.orchestrator import LlmOrchestrator
 from engine.model_manager.resolver import resolve_provider
 from engine.model_manager.tts_provider import TtsProvider
@@ -64,8 +75,17 @@ class Studio:
 
     def __init__(self, model: str = "gemma2:9b", provider_override: str | None = None) -> None:
         """provider_override: "ollama" | "openrouter" | "mock" to bypass the
-        auto-detection fallback chain (Ollama -> OpenRouter -> Mock). Compilers never
-        see which provider was chosen - only Studio and resolve_provider() know."""
+        auto-detection fallback chain and pin to exactly that provider (used by
+        tests and explicit CLI --provider flags - no runtime fallback in this mode,
+        matching resolve_provider()'s existing documented contract).
+
+        provider_override=None (the default, used by `nac studio`/`nac create`
+        with no flag): builds a FallbackProvider trying Ollama -> OpenRouter ->
+        MockProvider *at every generate() call*, not just once at construction.
+        Sprint 2A.1: a mid-session OpenRouter 429 (free-tier rate limit) used to
+        fail the whole pipeline even though MockProvider was always available as
+        a last resort - this makes that fallback actually happen, and records
+        each fallback event so the caller/UI can be told a provider was skipped."""
         resolver = PathResolver()
         start = Path(os.environ.get("NAC_ROOT_OVERRIDE", str(_repo_root)))
         self._root = resolver.find_root(start)
@@ -73,9 +93,28 @@ class Studio:
         db_path = resolver.resolve("projects/mvp.db")
         self._conn = init_db(db_path)
         self._repo = KnowledgeRepo(self._conn)
-        self._provider = resolve_provider(ollama_model=model, force=provider_override)
+        self.last_fallback_events: list[dict] = []
+        if provider_override is not None:
+            self._provider = resolve_provider(ollama_model=model, force=provider_override)
+        else:
+            self._provider = self._build_fallback_chain(model)
         self._orchestrator = LlmOrchestrator(self._provider)
         self._tts = TtsProvider()
+
+    def _build_fallback_chain(self, model: str) -> FallbackProvider:
+        providers: list = [OllamaProvider(model=model)]
+        try:
+            providers.append(OpenRouterProvider())
+        except OpenRouterNotConfiguredError:
+            pass  # no API key configured - Ollama and Mock are still in the chain
+        providers.append(MockProvider())
+
+        def on_fallback(provider, error: Exception) -> None:
+            self.last_fallback_events.append(
+                {"skipped_provider": type(provider).__name__, "error": str(error)}
+            )
+
+        return FallbackProvider(providers, on_fallback=on_fallback)
 
     def create_project(self, idea_text: str, target_runtime_minutes: int = 15) -> str:
         return self._repo.create_story(idea_text, target_runtime_minutes=target_runtime_minutes)
@@ -119,6 +158,56 @@ class Studio:
         metrics = self._repo.get_compiler_metrics(project_id)
         return export_project(story, metrics, Path(out_dir))
 
+    def get_diagnostics(self) -> dict:
+        """Sprint 2A.1: honest system-status snapshot for the Director Studio's
+        Diagnostics panel. Every field here is a real, live-checked value - no
+        placeholder/fabricated fields (no "GPU: RX5500M" unless a real GPU query
+        actually returns that name; unreachable/undetectable fields report
+        "unknown" or "not configured", never a guessed value)."""
+        ollama_reachable = False
+        try:
+            resp = requests.get("http://localhost:11434/api/tags", timeout=1.5)
+            ollama_reachable = resp.status_code == 200
+        except requests.RequestException:
+            ollama_reachable = False
+
+        try:
+            self._conn.execute("SELECT 1").fetchone()
+            sqlite_ok = True
+        except Exception:
+            sqlite_ok = False
+
+        try:
+            usage = shutil.disk_usage(self._root)
+            disk = {"free_gb": round(usage.free / 1e9, 1), "total_gb": round(usage.total / 1e9, 1)}
+        except OSError:
+            disk = None
+
+        gpu_name = "unknown"
+        nvidia_smi = shutil.which("nvidia-smi")
+        if nvidia_smi:
+            try:
+                out = subprocess.run(
+                    [nvidia_smi, "--query-gpu=name", "--format=csv,noheader"],
+                    capture_output=True, text=True, timeout=3,
+                )
+                if out.returncode == 0 and out.stdout.strip():
+                    gpu_name = out.stdout.strip().splitlines()[0]
+            except (subprocess.SubprocessError, OSError):
+                gpu_name = "unknown"
+
+        return {
+            "python_version": platform.python_version(),
+            "sdk_version": SDK_VERSION,
+            "sqlite": "ok" if sqlite_ok else "error",
+            "ollama": "reachable" if ollama_reachable else "unreachable",
+            "openrouter": "configured" if os.environ.get("OPENROUTER_API_KEY") else "not configured",
+            "disk": disk,
+            "gpu": gpu_name,
+            "capabilities": self.get_capabilities(),
+            "provider": self.get_provider_info(),
+        }
+
     def get_audio_path(self, project_id: str) -> Path | None:
         """Sprint 2A: read-only access to the saved audio file path, for the
         Director Studio's audio player - avoids the audio route reaching into
@@ -146,8 +235,19 @@ class Studio:
         display field. Reports the LLM provider actually resolved for this Studio
         instance (Ollama/OpenRouter/Mock) - no execution-mode/GPU/credits data
         exists in the engine yet, so this stays a single honest field rather than
-        inventing the rest of PROVIDER_ADAPTER_SPEC.md's future shape."""
-        return {"llm_provider": type(self._provider).__name__}
+        inventing the rest of PROVIDER_ADAPTER_SPEC.md's future shape.
+
+        Sprint 2A.1: when running the auto-detect fallback chain, "llm_provider"
+        reports whichever provider actually served the LAST successful call (not
+        just the first in the chain), plus any fallback events recorded since
+        this Studio was constructed."""
+        if isinstance(self._provider, FallbackProvider):
+            return {
+                "llm_provider": self._provider.active_provider_name,
+                "fallback_chain": self._provider.provider_chain_names,
+                "fallback_events": list(self.last_fallback_events),
+            }
+        return {"llm_provider": type(self._provider).__name__, "fallback_chain": None, "fallback_events": []}
 
     def list_projects(self) -> list[dict]:
         """Sprint 2A: passthrough to KnowledgeRepo.list_stories() for the Director

@@ -128,6 +128,15 @@ def test_capabilities_and_provider_routes(client):
     assert resp.json()["llm_provider"] == "MockProvider"
 
 
+def test_diagnostics_route(client):
+    resp = client.get("/api/diagnostics")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["sqlite"] == "ok"
+    assert body["provider"]["llm_provider"] == "MockProvider"
+    assert isinstance(body["capabilities"], list)
+
+
 def test_metrics_route(client):
     project_id = client.post("/api/projects", json={"idea_text": "An idea"}).json()["id"]
     client.post(f"/api/projects/{project_id}/generate/story")
