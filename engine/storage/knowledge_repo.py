@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import uuid
+from datetime import datetime, timezone
 
 
 class KnowledgeRepo:
@@ -17,10 +18,16 @@ class KnowledgeRepo:
         self._conn = conn
 
     def create_story(self, idea_text: str, target_runtime_minutes: int = 15) -> str:
+        """created_at is generated here (microsecond ISO 8601) rather than left to
+        SQLite's `datetime('now')` default, which only has second-level precision -
+        two projects created in the same second would otherwise tie and sort
+        arbitrarily in list_stories()."""
         story_id = str(uuid.uuid4())
+        created_at = datetime.now(timezone.utc).isoformat()
         self._conn.execute(
-            "INSERT INTO story (id, idea_text, target_runtime_minutes) VALUES (?, ?, ?)",
-            (story_id, idea_text, target_runtime_minutes),
+            "INSERT INTO story (id, idea_text, target_runtime_minutes, created_at) "
+            "VALUES (?, ?, ?, ?)",
+            (story_id, idea_text, target_runtime_minutes, created_at),
         )
         self._conn.commit()
         return story_id
@@ -76,6 +83,29 @@ class KnowledgeRepo:
             (prompt_text, story_id),
         )
         self._conn.commit()
+
+    def list_stories(self) -> list[dict]:
+        """Sprint 2A: project discovery for the Director Studio's Project Home -
+        without this there is no way to enumerate existing projects (the CLI and
+        Studio SDK previously assumed the caller already knew the project id)."""
+        rows = self._conn.execute(
+            "SELECT id, idea_text, target_runtime_minutes, story_bible, screenplay, "
+            "audio_path, motion_poster_prompt, created_at FROM story "
+            "ORDER BY created_at DESC"
+        ).fetchall()
+        return [
+            {
+                "id": r["id"],
+                "idea_text": r["idea_text"],
+                "target_runtime_minutes": r["target_runtime_minutes"],
+                "created_at": r["created_at"],
+                "story_bible": bool(r["story_bible"]),
+                "screenplay": bool(r["screenplay"]),
+                "audio": bool(r["audio_path"]),
+                "motion_poster_prompt": bool(r["motion_poster_prompt"]),
+            }
+            for r in rows
+        ]
 
     def get_status(self, story_id: str) -> dict:
         """Checkpoint C.5: which stages are populated for a project - the basis for

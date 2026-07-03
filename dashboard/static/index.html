@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>NAC Director Studio</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+<div id="home-view" class="view">
+  <header class="home-header">
+    <h1>NAC Director Studio <span class="badge">Sprint 2A - test build</span></h1>
+  </header>
+  <div id="project-list" class="project-list"></div>
+  <button id="new-project-btn" class="btn btn-primary">+ New Project</button>
+</div>
+
+<div id="new-project-dialog" class="modal hidden">
+  <div class="modal-box">
+    <h2>New Project</h2>
+    <label>Idea *<textarea id="np-idea" rows="3" placeholder="A one-line creative idea..."></textarea></label>
+    <label>Target Runtime (minutes) *<input id="np-runtime" type="number" value="15" min="1"></label>
+    <p class="note">Genre, Language, Audience, Output Type, Target Platforms, Aspect
+      Ratios and Quality Target are not implemented in this build - the NAC engine
+      has no fields for them yet. See "Known Limitations" in the Sprint 2A report.</p>
+    <div class="modal-actions">
+      <button id="np-cancel" class="btn">Cancel</button>
+      <button id="np-create" class="btn btn-primary">Create</button>
+    </div>
+  </div>
+</div>
+
+<div id="studio-view" class="view hidden">
+  <div class="studio-grid">
+
+    <nav id="left-panel" class="panel">
+      <button id="back-to-home" class="btn-link">&larr; Projects</button>
+      <h3>Project Navigator</h3>
+      <ul id="nav-list" class="nav-list"></ul>
+    </nav>
+
+    <main id="center-panel" class="panel">
+      <div id="stage-workspace"></div>
+    </main>
+
+    <aside id="right-panel" class="panel">
+      <h3>Production Info</h3>
+      <div id="production-info"></div>
+    </aside>
+
+    <footer id="bottom-panel" class="panel">
+      <h3>Production Timeline</h3>
+      <div id="timeline"></div>
+    </footer>
+
+  </div>
+</div>
+
+<div id="command-palette" class="modal hidden">
+  <div class="modal-box palette-box">
+    <input id="palette-input" placeholder="Type a command...">
+    <ul id="palette-list"></ul>
+  </div>
+</div>
+
+<div id="toast" class="toast hidden"></div>
+
+<script src="/app.js"></script>
+</body>
+</html>

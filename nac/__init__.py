@@ -40,6 +40,7 @@ from engine.compilers.screenplay_compiler import ScreenplayCompiler
 from engine.compilers.audio_compiler import AudioCompiler
 from engine.compilers.prompt_compiler import PromptCompiler
 from engine.portability.export import export_project
+from engine.packs.capability_registry import CAPABILITY_REGISTRY
 
 __all__ = ["Studio", "OllamaNotReachableError", "SDK_VERSION"]
 
@@ -117,6 +118,48 @@ class Studio:
         story = self._repo.get_story(project_id)
         metrics = self._repo.get_compiler_metrics(project_id)
         return export_project(story, metrics, Path(out_dir))
+
+    def get_audio_path(self, project_id: str) -> Path | None:
+        """Sprint 2A: read-only access to the saved audio file path, for the
+        Director Studio's audio player - avoids the audio route reaching into
+        KnowledgeRepo internals directly."""
+        story = self._repo.get_story(project_id)
+        return Path(story["audio_path"]) if story["audio_path"] else None
+
+    def get_capabilities(self) -> list[dict]:
+        """Sprint 2A: read-only passthrough of the Capability Registry (display
+        only - no logic lives outside engine.packs.capability_registry) for the
+        Director Studio's Providers panel. Honestly reports available=False
+        entries (elevenlabs, google_flow_music) rather than hiding them."""
+        return [
+            {
+                "capability": name,
+                "provider_id": entry.provider_id,
+                "execution_mode": entry.execution_mode.value,
+                "available": entry.available,
+            }
+            for name, entry in CAPABILITY_REGISTRY.items()
+        ]
+
+    def get_provider_info(self) -> dict:
+        """Sprint 2A: read-only passthrough for the Director Studio's Provider
+        display field. Reports the LLM provider actually resolved for this Studio
+        instance (Ollama/OpenRouter/Mock) - no execution-mode/GPU/credits data
+        exists in the engine yet, so this stays a single honest field rather than
+        inventing the rest of PROVIDER_ADAPTER_SPEC.md's future shape."""
+        return {"llm_provider": type(self._provider).__name__}
+
+    def list_projects(self) -> list[dict]:
+        """Sprint 2A: passthrough to KnowledgeRepo.list_stories() for the Director
+        Studio's Project Home - see that method's docstring for why this was
+        missing until now."""
+        return self._repo.list_stories()
+
+    def get_metrics(self, project_id: str) -> list[dict]:
+        """Sprint 2A: read-only passthrough to the compiler_metrics table already
+        written by every generate_*() call, for the Director Studio's per-stage
+        Metrics panel - previously recorded but never exposed through the SDK."""
+        return self._repo.get_compiler_metrics(project_id)
 
     def get_status(self, project_id: str) -> dict:
         """Checkpoint C.5: partial-compilation support - shows which stages are
