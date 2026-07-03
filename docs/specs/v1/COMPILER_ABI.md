@@ -77,4 +77,4 @@ CompilerDeclaration {
 ```
 
 `abi_version` pins which version of this document the compiler was written against —
-see `VERSIONING_POLICY.md` §Compiler ABI versioning for the compatibility rule.
+see `VERSIONING_POLICY.md` §Creative Compiler ABI versioning for the compatibility rule.

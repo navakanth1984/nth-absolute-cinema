@@ -78,12 +78,12 @@ ModelReference {
 
 ```
 1. Verify manifest.nac_format_version and graph_spec_version are compatible with the
-   importing NAC installation (VERSIONING_POLICY.md §.nac compatibility)
+   importing NAC installation (VERSIONING_POLICY.md §`.nac` package versioning)
 2. Restore all five graphs + genomes + provenance + review_history into projects/<new_id>/
 3. Run Compute Manager hardware profiling on the destination machine
    (COMPUTE_MANAGER_SPEC.md) to select an execution profile
 4. Diff manifest.referenced_local_models against installed models; install only the
-   missing ones (COMPUTE_MANAGER_SPEC.md §On-demand model installation)
+   missing ones (COMPUTE_MANAGER_SPEC.md §Model Manager: on-demand installation)
 5. For each entry in assets/references.json NOT embedded in the package: attempt
    regeneration from its Provenance block; if regeneration is not possible (e.g. a
    cloud model version no longer exists), mark the Asset node status="missing" rather
