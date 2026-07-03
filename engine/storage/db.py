@@ -9,11 +9,20 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS story (
     id TEXT PRIMARY KEY,
     idea_text TEXT NOT NULL,
+    target_runtime_minutes INTEGER NOT NULL DEFAULT 15,
     story_bible TEXT,
     screenplay TEXT,
     audio_path TEXT,
     motion_poster_prompt TEXT,
     graph_spec_version TEXT NOT NULL DEFAULT '1.0',
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS compiler_metrics (
+    id TEXT PRIMARY KEY,
+    story_id TEXT NOT NULL REFERENCES story(id),
+    compiler TEXT NOT NULL,
+    metrics_json TEXT NOT NULL,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 """
