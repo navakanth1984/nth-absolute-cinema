@@ -16,7 +16,7 @@ class OpenRouterNotConfiguredError(RuntimeError):
 class OpenRouterProvider:
     def __init__(
         self,
-        model: str = "google/gemma-4-31b-it:free",
+        model: str = "google/gemma-4-26b-a4b-it:free",
         base_url: str = "https://openrouter.ai/api/v1",
         timeout_s: float = 90.0,
         api_key: str | None = None,

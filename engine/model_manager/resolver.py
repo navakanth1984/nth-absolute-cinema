@@ -31,7 +31,7 @@ def _ollama_reachable(base_url: str, timeout_s: float = 1.5) -> bool:
 
 def resolve_provider(
     ollama_model: str = "gemma2:9b",
-    openrouter_model: str = "google/gemma-4-31b-it:free",
+    openrouter_model: str = "google/gemma-4-26b-a4b-it:free",
     base_url: str = "http://localhost:11434",
     force: str | None = None,
 ) -> LlmProvider:
