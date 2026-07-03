@@ -5,9 +5,16 @@ description = "Nth Absolute Cinema - Creative Operating System SDK"
 requires-python = ">=3.12"
 dependencies = ["requests>=2.31", "pyttsx3>=2.90"]
 
+[project.scripts]
+nac = "cli.__main__:main"
+
 [build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-packages = ["nac", "engine", "engine.kernel", "engine.storage", "engine.model_manager", "engine.compilers"]
+packages = [
+    "nac", "cli",
+    "engine", "engine.kernel", "engine.storage", "engine.model_manager",
+    "engine.compilers", "engine.packs", "engine.extensions", "engine.portability",
+]
