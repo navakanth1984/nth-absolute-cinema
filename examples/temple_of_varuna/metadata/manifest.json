@@ -1,0 +1,12 @@
+{
+  "story_id": "f9f2aa62-6b57-44a8-a961-f06eb20f8243",
+  "graph_spec_version": "1.0",
+  "nac_format_version": "0.1.0-mvp",
+  "target_runtime_minutes": 15,
+  "compilers_run": [
+    "story_compiler",
+    "screenplay_compiler",
+    "audio_compiler",
+    "prompt_compiler"
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "compiler": "story_compiler",
+  "created_at": "2026-07-03 13:59:48",
+  "duration_s": 33.984,
+  "tokens": 452,
+  "model": "google/gemma-4-26b-a4b-it:free",
+  "cost_usd": 0.0,
+  "confidence": 0.6,
+  "warnings": [],
+  "quality_score": null,
+  "output_hash": "fdea8fe5de81ddb30039d18b402680dd97d6830843ab2b9ef0c851ec926f6c29",
+  "knowledge_version": "1.0",
+  "compiler_version": "0.1.0",
+  "provider": "OpenRouterProvider",
+  "attempts": 1
+}

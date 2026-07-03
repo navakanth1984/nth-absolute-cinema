@@ -1,0 +1,16 @@
+{
+  "compiler": "audio_compiler",
+  "created_at": "2026-07-03 14:01:04",
+  "duration_s": 15.937,
+  "tokens": 1332,
+  "model": "pyttsx3",
+  "cost_usd": 0.0,
+  "confidence": 0.8,
+  "warnings": [],
+  "quality_score": null,
+  "output_hash": "ddf46f1f5f3f5ffd5c7f7fa47e0e7934b2fef548345353d99e48bd40afff7212",
+  "knowledge_version": "1.0",
+  "compiler_version": "0.1.0",
+  "provider": "pyttsx3",
+  "execution_mode": "local"
+}

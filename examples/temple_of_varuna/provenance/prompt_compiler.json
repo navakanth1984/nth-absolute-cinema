@@ -1,0 +1,17 @@
+{
+  "compiler": "prompt_compiler",
+  "created_at": "2026-07-03 14:01:22",
+  "duration_s": 17.407,
+  "tokens": 2368,
+  "model": "google/gemma-4-26b-a4b-it:free",
+  "cost_usd": 0.0,
+  "confidence": 0.5,
+  "warnings": [],
+  "quality_score": null,
+  "output_hash": "29aa5e7c9e18d75fcc39b0ff1aab6b86464644ca5438d09266af94127be8362d",
+  "knowledge_version": "1.0",
+  "compiler_version": "0.1.0",
+  "provider": "OpenRouterProvider",
+  "execution_mode": "ui",
+  "target_provider": "google_flow_mvp"
+}

@@ -1,0 +1,17 @@
+{
+  "compiler": "screenplay_compiler",
+  "created_at": "2026-07-03 14:00:47",
+  "duration_s": 56.062,
+  "tokens": 2535,
+  "model": "google/gemma-4-26b-a4b-it:free",
+  "cost_usd": 0.0,
+  "confidence": 0.6,
+  "warnings": [],
+  "quality_score": null,
+  "output_hash": "92f5c0ca09e24daeca8a0e74848f8dbf83c4d92a20a2d07b446a3855d130c481",
+  "knowledge_version": "1.0",
+  "compiler_version": "0.1.0",
+  "provider": "OpenRouterProvider",
+  "attempts": 1,
+  "target_runtime_minutes": 15
+}
