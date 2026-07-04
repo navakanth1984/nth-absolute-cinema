@@ -81,9 +81,12 @@ Nine genome types, each independently versioned and referenced (never copied) by
 node needing consistency:
 
 ```
-CharacterGenome { id, character_id, visual_refs: list[AssetRef], voice_seed: str, personality_traits: dict }
+CharacterGenome { id, character_id, visual_genome_ref: UUID|None, dialogue_genome_ref: UUID|None,
+                  costume_genome_ref: UUID|None, ... }  # full schema: CHARACTER_GENOME_SPEC.md (v1.1, MINOR bump)
 VisualGenome     { id, style_refs: list[AssetRef], negative_prompt: str, seed: int|None }
-DialogueGenome   { id, character_id, vocabulary_profile: dict, speech_pattern: str }
+DialogueGenome   { id, character_id, vocabulary_profile: dict, speech_pattern: str, voice_seed: str|None,
+                  accent, language, favorite_expressions, humor, emotion_range, speech_rhythm,
+                  catchphrases, forbidden_expressions }  # fields added in CHARACTER_GENOME_SPEC.md §3.8, MINOR bump
 MusicGenome      { id, tempo_range: tuple[int,int], instrumentation: list[str], mood_tags: list[str] }
 EditingGenome    { id, pacing_profile: str, cut_frequency: float }
 CameraGenome     { id, lens_preference: str, movement_style: str }
@@ -91,6 +94,14 @@ LightingGenome   { id, key_light_ratio: float, color_temp_k: int }
 CostumeGenome    { id, character_id, palette: list[str], material_refs: list[AssetRef] }
 EnvironmentGenome{ id, location_id, atmosphere_tags: list[str], palette: list[str] }
 ```
+
+`CharacterGenome`'s full structure (Identity/Physical/Psychological/Narrative/
+Relationship/Performance/Behavior/Knowledge/Production/VersionMetadata field
+groups, write-authority table, and the graph-spec-1.0→1.1 field migration) is
+specified in full in `CHARACTER_GENOME_SPEC.md` rather than inline here - this
+is a MINOR (additive) expansion per `VERSIONING_POLICY.md`, not a breaking
+change to this frozen document. UI label: "Character Bible"; SDK/graph/docs:
+`CharacterGenome`.
 
 `AssetRef = { asset_id: UUID, content_hash: str }` — always a reference into
 `AssetGraph` (§5), never an embedded binary.
