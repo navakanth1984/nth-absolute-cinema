@@ -81,9 +81,12 @@ Nine genome types, each independently versioned and referenced (never copied) by
 node needing consistency:
 
 ```
-CharacterGenome { id, character_id, visual_refs: list[AssetRef], voice_seed: str, personality_traits: dict }
+CharacterGenome { id, character_id, visual_genome_ref: UUID|None, dialogue_genome_ref: UUID|None,
+                  costume_genome_ref: UUID|None, ... }  # full schema: CHARACTER_GENOME_SPEC.md (v1.1, MINOR bump)
 VisualGenome     { id, style_refs: list[AssetRef], negative_prompt: str, seed: int|None }
-DialogueGenome   { id, character_id, vocabulary_profile: dict, speech_pattern: str }
+DialogueGenome   { id, character_id, vocabulary_profile: dict, speech_pattern: str, voice_seed: str|None,
+                  accent, language, favorite_expressions, humor, emotion_range, speech_rhythm,
+                  catchphrases, forbidden_expressions }  # fields added in CHARACTER_GENOME_SPEC.md §3.8, MINOR bump
 MusicGenome      { id, tempo_range: tuple[int,int], instrumentation: list[str], mood_tags: list[str] }
 EditingGenome    { id, pacing_profile: str, cut_frequency: float }
 CameraGenome     { id, lens_preference: str, movement_style: str }
@@ -91,6 +94,85 @@ LightingGenome   { id, key_light_ratio: float, color_temp_k: int }
 CostumeGenome    { id, character_id, palette: list[str], material_refs: list[AssetRef] }
 EnvironmentGenome{ id, location_id, atmosphere_tags: list[str], palette: list[str] }
 ```
+
+`CharacterGenome`'s full structure (Identity/Physical/Psychological/Narrative/
+Relationship/Performance/Behavior/Knowledge/VersionMetadata field groups and
+the graph-spec-1.0→1.1 field migration) is specified in full in
+`CHARACTER_GENOME_SPEC.md` rather than inline here - this is a MINOR
+(additive) expansion per `VERSIONING_POLICY.md`, not a breaking change to this
+frozen document. UI label: "Character Bible"; SDK/graph/docs: `CharacterGenome`.
+Production/cost data for a genome lives in `ProductionGraph` (§6), never
+inside the genome itself - see §4.3.
+
+### 4.1 Genome Composition Rule (universal - graph-spec 1.2, applies to every genome type)
+
+1. A Genome may own only the information belonging to its Department.
+2. A Genome may reference any number of other Genomes.
+3. A Genome shall never embed another Genome.
+4. Every Genome is independently versioned.
+5. Every Genome has exactly one owning Department.
+6. Only the owning Department may modify that Genome.
+7. Other Departments reference the latest **approved** version - not the
+   latest version unconditionally, since an unapproved edit should not
+   propagate to consumers until `ReviewGraph` (§7) records approval.
+
+This generalizes the reference-not-copy rule already stated for the nine
+genome types below (previously scoped only to "never copied" - now explicit
+about versioning, ownership, and approval-gating) and is not
+Character-Genome-specific: it governs `VisualGenome`, `DialogueGenome`,
+`CostumeGenome`, `CameraGenome`, `MusicGenome`, `LightingGenome`,
+`EditingGenome`, and `EnvironmentGenome` identically.
+
+### 4.2 Genome ownership
+
+| Genome | Owning Department |
+|---|---|
+| `CharacterGenome` | Character |
+| `DialogueGenome` | Dialogue |
+| `CostumeGenome` | Costume |
+| `VisualGenome` | Cinematography |
+| `CameraGenome` | Cinematography |
+| `LightingGenome` | Cinematography |
+| `MusicGenome` | Music |
+| `EditingGenome` | Editing |
+| `EnvironmentGenome` | Location |
+
+A department not listed here that needs to read a genome does so via a
+`GenomeReference` (below) - it never writes to a genome it does not own.
+
+### 4.3 GenomeReference (replaces bare `*_genome_ref: UUID` fields)
+
+```
+GenomeReference {
+  genome_id: UUID
+  genome_type: str       # e.g. "VisualGenome" - which of the nine types
+  version: int
+  status: str            # matches ReviewGraph verdict values - "approved" is
+                          # the only status other departments may consume per
+                          # the Composition Rule's point 7
+}
+```
+
+Any field previously typed `some_genome_ref: UUID` (e.g.
+`CharacterGenome.visual_genome_ref` in `CHARACTER_GENOME_SPEC.md` §3.7-3.9) is
+now typed `GenomeReference` instead - this is what makes replay possible
+("Hanuman's `VisualGenome` at version 12, approved" is a resolvable, pinned
+reference; a bare UUID with no version is not). MINOR bump, additive: a
+`GenomeReference` with `version` unset/None behaves as "latest approved," so
+existing bare-UUID-shaped callers are not broken, only under-specified
+compared to what's now possible.
+
+### 4.4 Genome reusability across projects
+
+A Genome (e.g. a `CharacterGenome` for "Hanuman") carries no `project_id` and
+is not owned by any single project - it is the project-specific `Character`
+node (§2) that references a genome via `genome_ref`/`GenomeReference`. The
+same `CharacterGenome` may be referenced by `Character` nodes in multiple
+projects ("Temple of Varuna," "Ramayana," a marketing campaign) without
+duplication. This is why Production data (cost, GPU time, scene/shot usage -
+all inherently project-specific) must live in `ProductionGraph` keyed by
+`(project_id, genome_id)`, never embedded in the genome: embedding it would
+make the genome non-portable across projects, defeating reuse.
 
 `AssetRef = { asset_id: UUID, content_hash: str }` — always a reference into
 `AssetGraph` (§5), never an embedded binary.
@@ -112,6 +194,7 @@ requirement in the design doc §5.
 |---|---|
 | `Job` | `id`, `compiler_id: str`, `status: str`, `depends_on: list[UUID]` |
 | `Estimate` | `id`, `job_id: UUID`, `estimated_tokens: int`, `estimated_gpu_hours: float`, `estimated_ram_mb: int`, `estimated_time_s: int`, `estimated_cost_usd: float`, `confidence: float` |
+| `GenomeProductionRecord` | `id`, `project_id: UUID`, `genome_id: UUID`, `genome_type: str`, `generated_assets: list[AssetRef]`, `scene_usage: list[UUID]`, `shot_usage: list[UUID]`, `estimated_cost_usd: float`, `estimated_tokens: int`, `gpu_time_s: float` | Per §4.4: production/cost data for *any* genome, keyed by `(project_id, genome_id)` - not embedded in the genome itself, so the same genome stays portable across projects. Supersedes the "Production" field group originally drafted inline on `CharacterGenome` in `CHARACTER_GENOME_SPEC.md`. |
 
 ## 7. Review Graph node types
 
@@ -154,5 +237,9 @@ Provenance {
 ## 10. Versioning of this schema
 
 See `VERSIONING_POLICY.md` §Creative Graph Specification versioning. This document is
-`v1.0`; a `graph_spec_version` field on the root `Story` node pins every project to
-the schema version it was created under.
+`v1.2` (1.0 → 1.1: `CharacterGenome`/`DialogueGenome` field expansion, see
+`CHARACTER_GENOME_SPEC.md`; 1.1 → 1.2: universal Genome Composition Rule §4.1,
+genome ownership §4.2, `GenomeReference` §4.3, genome reusability §4.4,
+`GenomeProductionRecord` §6 - all additive, no field removed or renamed). A
+`graph_spec_version` field on the root `Story` node pins every project to the
+schema version it was created under.

@@ -42,12 +42,19 @@ class KnowledgeRepo:
 
     def get_compiler_metrics(self, story_id: str) -> list[dict]:
         rows = self._conn.execute(
-            "SELECT compiler, metrics_json, created_at FROM compiler_metrics "
+            "SELECT id, story_id, compiler, metrics_json, created_at FROM compiler_metrics "
             "WHERE story_id = ? ORDER BY created_at",
             (story_id,),
         ).fetchall()
         return [
-            {"compiler": r["compiler"], "created_at": r["created_at"], **json.loads(r["metrics_json"])}
+            {
+                "id": r["id"],
+                "story_id": r["story_id"],
+                "compiler": r["compiler"],
+                "metrics_json": r["metrics_json"],
+                "created_at": r["created_at"],
+                **json.loads(r["metrics_json"]),
+            }
             for r in rows
         ]
 
@@ -115,6 +122,8 @@ class KnowledgeRepo:
         return {
             "story_id": story_id,
             "idea": bool(story["idea_text"]),
+            "idea_text": story["idea_text"],
+            "target_runtime_minutes": story["target_runtime_minutes"],
             "story_bible": bool(story["story_bible"]),
             "screenplay": bool(story["screenplay"]),
             "audio": bool(story["audio_path"]),
@@ -134,7 +143,7 @@ class KnowledgeRepo:
 
     def get_reviews(self, story_id: str) -> list[dict]:
         rows = self._conn.execute(
-            "SELECT stage, verdict, comment, created_at FROM review_log "
+            "SELECT id, story_id, stage, verdict, comment, created_at FROM review_log "
             "WHERE story_id = ? ORDER BY created_at",
             (story_id,),
         ).fetchall()
@@ -154,7 +163,7 @@ class KnowledgeRepo:
 
     def get_assets(self, story_id: str) -> list[dict]:
         rows = self._conn.execute(
-            "SELECT id, capability, file_path, content_hash, source, created_at "
+            "SELECT id, story_id, capability, file_path, content_hash, source, created_at "
             "FROM assets WHERE story_id = ? ORDER BY created_at",
             (story_id,),
         ).fetchall()

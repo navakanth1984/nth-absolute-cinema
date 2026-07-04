@@ -26,6 +26,15 @@ import sys
 from pathlib import Path
 
 import requests
+from dotenv import find_dotenv, load_dotenv
+
+# Provider Orchestration (feat/provider-orchestration): pick up GEMINI_API_KEY /
+# SARVAM_API_KEY / OPENROUTER_API_KEY from a .env file if one exists (searched
+# upward from the current working directory - e.g. the workspace-root .env this
+# repo is developed alongside), without ever overriding a real env var the shell
+# already has set. Never raises if no .env is found; providers stay in their
+# existing "not configured" state, same as before dotenv support existed.
+load_dotenv(find_dotenv(usecwd=True))
 
 SDK_VERSION = "0.1.0"
 
@@ -37,6 +46,7 @@ from engine.kernel.paths import PathResolver
 from engine.storage.db import init_db
 from engine.storage.knowledge_repo import KnowledgeRepo
 from engine.model_manager.fallback_provider import FallbackProvider
+from engine.model_manager.gemini_provider import GeminiNotConfiguredError, GeminiProvider
 from engine.model_manager.mock_provider import MockProvider
 from engine.model_manager.ollama_provider import OllamaNotReachableError, OllamaProvider
 from engine.model_manager.openrouter_provider import (
@@ -45,15 +55,37 @@ from engine.model_manager.openrouter_provider import (
 )
 from engine.model_manager.orchestrator import LlmOrchestrator
 from engine.model_manager.resolver import resolve_provider
+from engine.model_manager.sarvam_tts_provider import SarvamNotConfiguredError, SarvamTtsProvider
+from engine.model_manager.elevenlabs_provider import ElevenLabsNotConfiguredError, ElevenLabsProvider
+from engine.model_manager.tts_fallback_provider import TtsFallbackProvider
 from engine.model_manager.tts_provider import TtsProvider
 from engine.compilers.story_compiler import StoryCompiler
 from engine.compilers.screenplay_compiler import ScreenplayCompiler
 from engine.compilers.audio_compiler import AudioCompiler
 from engine.compilers.prompt_compiler import PromptCompiler
 from engine.portability.export import export_project
+from engine.portability.snapshot import Snapshot, SnapshotManifest, SnapshotManager
+from engine.portability.serializer import NacSerializer, NacDeserializer
+from engine.storage.provider import (
+    LocalStorageProvider,
+    ExternalStorageProvider,
+    AzureStorageProvider,
+    GoogleStorageProvider,
+    StorageRegistry,
+    StorageResolver,
+)
 from engine.packs.capability_registry import CAPABILITY_REGISTRY
 
-__all__ = ["Studio", "OllamaNotReachableError", "SDK_VERSION"]
+__all__ = [
+    "Studio",
+    "OllamaNotReachableError",
+    "SDK_VERSION",
+    "Snapshot",
+    "SnapshotManifest",
+    "SnapshotManager",
+    "NacSerializer",
+    "NacDeserializer",
+]
 
 _STAGE_DISPATCH = {
     "story": "generate_story",
@@ -73,7 +105,12 @@ class Studio:
     real right now versus what's coming, rather than silently no-op-ing.
     """
 
-    def __init__(self, model: str = "gemma2:9b", provider_override: str | None = None) -> None:
+    def __init__(
+        self,
+        model: str = "gemma2:9b",
+        provider_override: str | None = None,
+        voice_override: str | None = None,
+    ) -> None:
         """provider_override: "ollama" | "openrouter" | "mock" to bypass the
         auto-detection fallback chain and pin to exactly that provider (used by
         tests and explicit CLI --provider flags - no runtime fallback in this mode,
@@ -94,12 +131,21 @@ class Studio:
         self._conn = init_db(db_path)
         self._repo = KnowledgeRepo(self._conn)
         self.last_fallback_events: list[dict] = []
+        self.last_tts_fallback_events: list[dict] = []
         if provider_override is not None:
             self._provider = resolve_provider(ollama_model=model, force=provider_override)
         else:
             self._provider = self._build_fallback_chain(model)
         self._orchestrator = LlmOrchestrator(self._provider)
-        self._tts = TtsProvider()
+        self._tts = self._build_tts_chain(voice_override=voice_override)
+
+        # Initialize storage providers
+        self._storage_registry = StorageRegistry()
+        self._storage_registry.register("local", LocalStorageProvider(resolver.resolve("projects/storage/local")))
+        self._storage_registry.register("external", ExternalStorageProvider(resolver.resolve("projects/storage/external")))
+        self._storage_registry.register("azure", AzureStorageProvider("https://nac.blob.core.windows.net/snapshots"))
+        self._storage_registry.register("google", GoogleStorageProvider("gs://nac-snapshots"))
+        self._storage_resolver = StorageResolver(self._storage_registry)
 
     def _build_fallback_chain(self, model: str) -> FallbackProvider:
         """Sprint 2A.2 fix: OllamaProvider's default generate() timeout is 120s
@@ -111,13 +157,36 @@ class Studio:
         _ollama_reachable) skips Ollama entirely when it's not actually running,
         and the fallback-chain's OpenRouter instance gets a much shorter timeout
         than the default, since MockProvider is always one hop away as an
-        instant, guaranteed-to-succeed last resort."""
+        instant, guaranteed-to-succeed last resort.
+
+        Provider Orchestration (feat/provider-orchestration): local models run
+        before cloud ones (free, private, no network round-trip). Additional
+        local model tags (e.g. a locally-pulled Gemma or DeepSeek model) are
+        opt-in via NAC_LOCAL_OLLAMA_MODELS (comma-separated Ollama tags, tried
+        in order) - not hardcoded here, since guessing a specific tag someone
+        hasn't actually `ollama pull`-ed would just be a new silent-failure
+        mode. Gemini is added as a second cloud fallback alongside OpenRouter,
+        both optional on their own API key."""
         providers: list = []
         try:
-            if requests.get("http://localhost:11434/api/tags", timeout=1.5).status_code == 200:
-                providers.append(OllamaProvider(model=model))
+            ollama_reachable = (
+                requests.get("http://localhost:11434/api/tags", timeout=1.5).status_code == 200
+            )
         except requests.RequestException:
-            pass  # Ollama not reachable - skip it instead of letting generate() hang on it
+            ollama_reachable = False  # Ollama not reachable - skip it instead of letting generate() hang on it
+
+        if ollama_reachable:
+            local_models = [
+                m.strip()
+                for m in os.environ.get("NAC_LOCAL_OLLAMA_MODELS", model).split(",")
+                if m.strip()
+            ]
+            for local_model in dict.fromkeys(local_models):  # de-dupe, keep order
+                providers.append(OllamaProvider(model=local_model))
+        try:
+            providers.append(GeminiProvider(timeout_s=20.0))
+        except GeminiNotConfiguredError:
+            pass  # no API key configured - later providers are still in the chain
         try:
             providers.append(OpenRouterProvider(timeout_s=15.0))
         except OpenRouterNotConfiguredError:
@@ -130,6 +199,38 @@ class Studio:
             )
 
         return FallbackProvider(providers, on_fallback=on_fallback)
+
+    def _build_tts_chain(self, voice_override: str | None = None) -> TtsFallbackProvider:
+        """Builds the TTS fallback chain: ElevenLabs -> Sarvam -> pyttsx3.
+        Supports explicit override via voice_override parameter or NAC_VOICE_PROVIDER_OVERRIDE env var."""
+        override = voice_override or os.environ.get("NAC_VOICE_PROVIDER_OVERRIDE")
+        if override:
+            override = override.lower().strip()
+            if override in ("elevenlabs", "eleven_labs"):
+                return TtsFallbackProvider([ElevenLabsProvider()])
+            if override == "sarvam":
+                return TtsFallbackProvider([SarvamTtsProvider()])
+            if override in ("pyttsx3", "local"):
+                return TtsFallbackProvider([TtsProvider()])
+            raise ValueError(f"Unknown voice provider override: {override}")
+
+        backends: list = []
+        try:
+            backends.append(ElevenLabsProvider())
+        except ElevenLabsNotConfiguredError:
+            pass  # no API key configured - later providers are still in the chain
+        try:
+            backends.append(SarvamTtsProvider())
+        except SarvamNotConfiguredError:
+            pass  # no API key configured - pyttsx3 is still in the chain
+        backends.append(TtsProvider())
+
+        def on_fallback(backend, error: Exception) -> None:
+            self.last_tts_fallback_events.append(
+                {"skipped_backend": type(backend).__name__, "error": str(error)}
+            )
+
+        return TtsFallbackProvider(backends, on_fallback=on_fallback)
 
     def create_project(self, idea_text: str, target_runtime_minutes: int = 15) -> str:
         return self._repo.create_story(idea_text, target_runtime_minutes=target_runtime_minutes)
@@ -225,16 +326,53 @@ class Studio:
             except (subprocess.SubprocessError, OSError):
                 gpu_name = "unknown"
 
+        # Get storage health and providers list
+        storage_providers = self.list_storage_providers()
+
+        # Get count of snapshots on disk
+        snapshots_count = 0
+        packages_dir = Path(self._resolver.resolve("projects/storage/local/packages"))
+        if packages_dir.is_dir():
+            snapshots_count = len([p for p in packages_dir.iterdir() if p.is_dir() and (p / "manifest.json").is_file()])
+
+        # Get graph health across all projects
+        graph_health = {}
+        for p in self.list_projects():
+            pid = p["id"]
+            try:
+                snapshot = self.create_project_snapshot(pid)
+                violations = self.validate_project_snapshot(snapshot)
+                graph_health[pid] = {
+                    "health": "healthy" if not violations else "unhealthy",
+                    "violations": violations
+                }
+            except Exception as e:
+                graph_health[pid] = {
+                    "health": "error",
+                    "violations": [str(e)]
+                }
+
         return {
             "python_version": platform.python_version(),
             "sdk_version": SDK_VERSION,
             "sqlite": "ok" if sqlite_ok else "error",
             "ollama": "reachable" if ollama_reachable else "unreachable",
             "openrouter": "configured" if os.environ.get("OPENROUTER_API_KEY") else "not configured",
+            "gemini": "configured" if os.environ.get("GEMINI_API_KEY") else "not configured",
+            "sarvam": "configured" if os.environ.get("SARVAM_API_KEY") else "not configured",
+            "elevenlabs": "configured" if os.environ.get("ELEVENLABS_API_KEY") else "not configured",
             "disk": disk,
             "gpu": gpu_name,
             "capabilities": self.get_capabilities(),
             "provider": self.get_provider_info(),
+            "storage": {
+                "active_provider": "local",
+                "providers": storage_providers,
+            },
+            "snapshots_info": {
+                "count": snapshots_count,
+            },
+            "graph_health": graph_health,
         }
 
     def get_audio_path(self, project_id: str) -> Path | None:
@@ -271,12 +409,23 @@ class Studio:
         just the first in the chain), plus any fallback events recorded since
         this Studio was constructed."""
         if isinstance(self._provider, FallbackProvider):
-            return {
+            info = {
                 "llm_provider": self._provider.active_provider_name,
                 "fallback_chain": self._provider.provider_chain_names,
                 "fallback_events": list(self.last_fallback_events),
             }
-        return {"llm_provider": type(self._provider).__name__, "fallback_chain": None, "fallback_events": []}
+        else:
+            info = {"llm_provider": type(self._provider).__name__, "fallback_chain": None, "fallback_events": []}
+
+        if isinstance(self._tts, TtsFallbackProvider):
+            info["tts_provider"] = self._tts.active_backend_name
+            info["tts_fallback_chain"] = self._tts.backend_chain_names
+            info["tts_fallback_events"] = list(self.last_tts_fallback_events)
+        else:
+            info["tts_provider"] = type(self._tts).__name__
+            info["tts_fallback_chain"] = None
+            info["tts_fallback_events"] = []
+        return info
 
     def list_projects(self) -> list[dict]:
         """Sprint 2A: passthrough to KnowledgeRepo.list_stories() for the Director
@@ -346,3 +495,84 @@ class Studio:
             "screenplay": story["screenplay"],
             "prompt": story["motion_poster_prompt"],
         }
+
+    # --- STORAGE AND SNAPSHOT INTEGRATION ---
+
+    def list_storage_providers(self) -> list[dict[str, Any]]:
+        """Expose all configured storage providers with their status, base path, and capabilities."""
+        results = []
+        for name in self._storage_registry.list_registered():
+            provider = self._storage_registry.get(name)
+            health = "unknown"
+            error = None
+            try:
+                health = "ok" if provider.health() else "unhealthy"
+            except Exception as e:
+                health = "error"
+                error = str(e)
+
+            results.append({
+                "name": name,
+                "type": type(provider).__name__,
+                "base_dir": str(getattr(provider, "base_dir", getattr(provider, "container_url", ""))),
+                "health": health,
+                "error": error,
+                "capabilities": provider.capabilities,
+            })
+        return results
+
+    def get_active_storage_provider(self) -> dict[str, Any]:
+        """Gets default active storage provider (e.g. local)."""
+        provider = self._storage_resolver.resolve("local")
+        return {
+            "name": "local",
+            "type": type(provider).__name__,
+            "base_dir": str(getattr(provider, "base_dir", "")),
+            "capabilities": provider.capabilities,
+        }
+
+    def create_project_snapshot(
+        self,
+        project_id: str,
+        compiler_versions: dict[str, str] | None = None,
+        pack_versions: dict[str, str] | None = None,
+        runtime_config: dict[str, Any] | None = None
+    ) -> Snapshot:
+        """Create a cryptographic Snapshot object of a project using SnapshotManager."""
+        manager = SnapshotManager()
+        prov_meta = self.get_provider_info()
+        env_meta = {
+            "python_version": platform.python_version(),
+            "platform": platform.platform(),
+        }
+        return manager.create_snapshot(
+            self._repo,
+            project_id,
+            compiler_versions=compiler_versions,
+            pack_versions=pack_versions,
+            provider_metadata=prov_meta,
+            environment_metadata=env_meta,
+            runtime_config=runtime_config,
+        )
+
+    def validate_project_snapshot(self, snapshot: Snapshot) -> list[str]:
+        """Validate Snapshot structure and return list of violations."""
+        return SnapshotManager().validate_snapshot(snapshot)
+
+    def verify_project_snapshot(self, snapshot: Snapshot) -> bool:
+        """Verify Snapshot cryptographic integrity."""
+        return SnapshotManager().verify_snapshot(snapshot)
+
+    def diff_project_snapshots(self, snap1: Snapshot, snap2: Snapshot) -> dict[str, Any]:
+        """Compare two Snapshots and return a detailed diff dictionary."""
+        return SnapshotManager().diff_snapshots(snap1, snap2)
+
+    def serialize_snapshot_to_nac(self, snapshot: Snapshot, target_dir: Path | str) -> Path:
+        """Serialize Snapshot object to an uncompressed .nac directory."""
+        serializer = NacSerializer()
+        return serializer.serialize(snapshot, Path(target_dir))
+
+    def deserialize_nac_to_snapshot(self, package_dir: Path | str) -> Snapshot:
+        """Deserialize an uncompressed .nac directory to a Snapshot object."""
+        deserializer = NacDeserializer()
+        return deserializer.deserialize(Path(package_dir))
