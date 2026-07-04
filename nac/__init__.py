@@ -51,9 +51,17 @@ from engine.compilers.screenplay_compiler import ScreenplayCompiler
 from engine.compilers.audio_compiler import AudioCompiler
 from engine.compilers.prompt_compiler import PromptCompiler
 from engine.portability.export import export_project
+from engine.portability.snapshot import Snapshot, SnapshotManifest, SnapshotManager
 from engine.packs.capability_registry import CAPABILITY_REGISTRY
 
-__all__ = ["Studio", "OllamaNotReachableError", "SDK_VERSION"]
+__all__ = [
+    "Studio",
+    "OllamaNotReachableError",
+    "SDK_VERSION",
+    "Snapshot",
+    "SnapshotManifest",
+    "SnapshotManager",
+]
 
 _STAGE_DISPATCH = {
     "story": "generate_story",
