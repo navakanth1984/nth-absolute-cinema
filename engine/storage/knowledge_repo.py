@@ -122,6 +122,8 @@ class KnowledgeRepo:
         return {
             "story_id": story_id,
             "idea": bool(story["idea_text"]),
+            "idea_text": story["idea_text"],
+            "target_runtime_minutes": story["target_runtime_minutes"],
             "story_bible": bool(story["story_bible"]),
             "screenplay": bool(story["screenplay"]),
             "audio": bool(story["audio_path"]),

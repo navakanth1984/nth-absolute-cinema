@@ -53,6 +53,14 @@ from engine.compilers.prompt_compiler import PromptCompiler
 from engine.portability.export import export_project
 from engine.portability.snapshot import Snapshot, SnapshotManifest, SnapshotManager
 from engine.portability.serializer import NacSerializer, NacDeserializer
+from engine.storage.provider import (
+    LocalStorageProvider,
+    ExternalStorageProvider,
+    AzureStorageProvider,
+    GoogleStorageProvider,
+    StorageRegistry,
+    StorageResolver,
+)
 from engine.packs.capability_registry import CAPABILITY_REGISTRY
 
 __all__ = [
@@ -111,6 +119,14 @@ class Studio:
             self._provider = self._build_fallback_chain(model)
         self._orchestrator = LlmOrchestrator(self._provider)
         self._tts = TtsProvider()
+
+        # Initialize storage providers
+        self._storage_registry = StorageRegistry()
+        self._storage_registry.register("local", LocalStorageProvider(resolver.resolve("projects/storage/local")))
+        self._storage_registry.register("external", ExternalStorageProvider(resolver.resolve("projects/storage/external")))
+        self._storage_registry.register("azure", AzureStorageProvider("https://nac.blob.core.windows.net/snapshots"))
+        self._storage_registry.register("google", GoogleStorageProvider("gs://nac-snapshots"))
+        self._storage_resolver = StorageResolver(self._storage_registry)
 
     def _build_fallback_chain(self, model: str) -> FallbackProvider:
         """Sprint 2A.2 fix: OllamaProvider's default generate() timeout is 120s
@@ -236,6 +252,32 @@ class Studio:
             except (subprocess.SubprocessError, OSError):
                 gpu_name = "unknown"
 
+        # Get storage health and providers list
+        storage_providers = self.list_storage_providers()
+
+        # Get count of snapshots on disk
+        snapshots_count = 0
+        packages_dir = Path(self._resolver.resolve("projects/storage/local/packages"))
+        if packages_dir.is_dir():
+            snapshots_count = len([p for p in packages_dir.iterdir() if p.is_dir() and (p / "manifest.json").is_file()])
+
+        # Get graph health across all projects
+        graph_health = {}
+        for p in self.list_projects():
+            pid = p["id"]
+            try:
+                snapshot = self.create_project_snapshot(pid)
+                violations = self.validate_project_snapshot(snapshot)
+                graph_health[pid] = {
+                    "health": "healthy" if not violations else "unhealthy",
+                    "violations": violations
+                }
+            except Exception as e:
+                graph_health[pid] = {
+                    "health": "error",
+                    "violations": [str(e)]
+                }
+
         return {
             "python_version": platform.python_version(),
             "sdk_version": SDK_VERSION,
@@ -246,6 +288,14 @@ class Studio:
             "gpu": gpu_name,
             "capabilities": self.get_capabilities(),
             "provider": self.get_provider_info(),
+            "storage": {
+                "active_provider": "local",
+                "providers": storage_providers,
+            },
+            "snapshots_info": {
+                "count": snapshots_count,
+            },
+            "graph_health": graph_health,
         }
 
     def get_audio_path(self, project_id: str) -> Path | None:
@@ -357,3 +407,84 @@ class Studio:
             "screenplay": story["screenplay"],
             "prompt": story["motion_poster_prompt"],
         }
+
+    # --- STORAGE AND SNAPSHOT INTEGRATION ---
+
+    def list_storage_providers(self) -> list[dict[str, Any]]:
+        """Expose all configured storage providers with their status, base path, and capabilities."""
+        results = []
+        for name in self._storage_registry.list_registered():
+            provider = self._storage_registry.get(name)
+            health = "unknown"
+            error = None
+            try:
+                health = "ok" if provider.health() else "unhealthy"
+            except Exception as e:
+                health = "error"
+                error = str(e)
+
+            results.append({
+                "name": name,
+                "type": type(provider).__name__,
+                "base_dir": str(getattr(provider, "base_dir", getattr(provider, "container_url", ""))),
+                "health": health,
+                "error": error,
+                "capabilities": provider.capabilities,
+            })
+        return results
+
+    def get_active_storage_provider(self) -> dict[str, Any]:
+        """Gets default active storage provider (e.g. local)."""
+        provider = self._storage_resolver.resolve("local")
+        return {
+            "name": "local",
+            "type": type(provider).__name__,
+            "base_dir": str(getattr(provider, "base_dir", "")),
+            "capabilities": provider.capabilities,
+        }
+
+    def create_project_snapshot(
+        self,
+        project_id: str,
+        compiler_versions: dict[str, str] | None = None,
+        pack_versions: dict[str, str] | None = None,
+        runtime_config: dict[str, Any] | None = None
+    ) -> Snapshot:
+        """Create a cryptographic Snapshot object of a project using SnapshotManager."""
+        manager = SnapshotManager()
+        prov_meta = self.get_provider_info()
+        env_meta = {
+            "python_version": platform.python_version(),
+            "platform": platform.platform(),
+        }
+        return manager.create_snapshot(
+            self._repo,
+            project_id,
+            compiler_versions=compiler_versions,
+            pack_versions=pack_versions,
+            provider_metadata=prov_meta,
+            environment_metadata=env_meta,
+            runtime_config=runtime_config,
+        )
+
+    def validate_project_snapshot(self, snapshot: Snapshot) -> list[str]:
+        """Validate Snapshot structure and return list of violations."""
+        return SnapshotManager().validate_snapshot(snapshot)
+
+    def verify_project_snapshot(self, snapshot: Snapshot) -> bool:
+        """Verify Snapshot cryptographic integrity."""
+        return SnapshotManager().verify_snapshot(snapshot)
+
+    def diff_project_snapshots(self, snap1: Snapshot, snap2: Snapshot) -> dict[str, Any]:
+        """Compare two Snapshots and return a detailed diff dictionary."""
+        return SnapshotManager().diff_snapshots(snap1, snap2)
+
+    def serialize_snapshot_to_nac(self, snapshot: Snapshot, target_dir: Path | str) -> Path:
+        """Serialize Snapshot object to an uncompressed .nac directory."""
+        serializer = NacSerializer()
+        return serializer.serialize(snapshot, Path(target_dir))
+
+    def deserialize_nac_to_snapshot(self, package_dir: Path | str) -> Snapshot:
+        """Deserialize an uncompressed .nac directory to a Snapshot object."""
+        deserializer = NacDeserializer()
+        return deserializer.deserialize(Path(package_dir))

@@ -148,6 +148,10 @@ def test_diagnostics_route(client):
     assert body["sqlite"] == "ok"
     assert body["provider"]["llm_provider"] == "MockProvider"
     assert isinstance(body["capabilities"], list)
+    # Expanded diagnostics checks
+    assert "storage" in body
+    assert "snapshots_info" in body
+    assert "graph_health" in body
 
 
 def test_metrics_route(client):
@@ -157,3 +161,100 @@ def test_metrics_route(client):
     resp = client.get(f"/api/projects/{project_id}/metrics")
     assert resp.status_code == 200
     assert len(resp.json()) == 1
+
+
+# --- STORAGE WORKSPACE TESTS ---
+
+def test_storage_providers_endpoints(client):
+    resp = client.get("/api/storage/providers")
+    assert resp.status_code == 200
+    providers = resp.json()
+    assert len(providers) == 4
+    names = [p["name"] for p in providers]
+    assert "local" in names
+    assert "external" in names
+    assert "azure" in names
+    assert "google" in names
+
+    resp = client.get("/api/storage/active")
+    assert resp.status_code == 200
+    assert resp.json()["name"] == "local"
+
+
+# --- SNAPSHOTS WORKSPACE TESTS ---
+
+def test_snapshots_workflow_api(client):
+    project_id = client.post("/api/projects", json={"idea_text": "A snapshot idea"}).json()["id"]
+    client.post(f"/api/projects/{project_id}/generate/story")
+
+    # 1. Create snapshot
+    resp = client.post(f"/api/projects/{project_id}/snapshots")
+    assert resp.status_code == 200
+    snap = resp.json()
+    snapshot_id = snap["manifest"]["snapshot_id"]
+    assert snapshot_id
+    assert snap["story"]["idea_text"] == "A snapshot idea"
+
+    # 2. List snapshots
+    resp = client.get("/api/snapshots")
+    assert resp.status_code == 200
+    snaps_list = resp.json()
+    assert len(snaps_list) >= 1
+    assert any(s["snapshot_id"] == snapshot_id for s in snaps_list)
+
+    # 3. Inspect snapshot
+    resp = client.get(f"/api/snapshots/{snapshot_id}")
+    assert resp.status_code == 200
+    assert resp.json()["manifest"]["snapshot_id"] == snapshot_id
+
+    # 4. Verify snapshot
+    resp = client.post(f"/api/snapshots/{snapshot_id}/verify")
+    assert resp.status_code == 200
+    assert resp.json()["verified"] is True
+    assert resp.json()["violations"] == []
+
+    # 5. Diff snapshots (requires creating a second snapshot)
+    client.post(f"/api/projects/{project_id}/generate/screenplay")
+    snap2 = client.post(f"/api/projects/{project_id}/snapshots").json()
+    snapshot2_id = snap2["manifest"]["snapshot_id"]
+
+    resp = client.post("/api/snapshots/diff", json={"snapshot1_id": snapshot_id, "snapshot2_id": snapshot2_id})
+    assert resp.status_code == 200
+    diff = resp.json()
+    assert diff["project_ids_match"] is True
+    assert "screenplay" in diff["story"]["modified_fields"]
+
+
+# --- PACKAGES WORKSPACE TESTS ---
+
+def test_packages_workflow_api(client):
+    project_id = client.post("/api/projects", json={"idea_text": "A package idea"}).json()["id"]
+    
+    # 1. Create package
+    resp = client.post(f"/api/projects/{project_id}/packages")
+    assert resp.status_code == 200
+    pkg = resp.json()
+    package_id = pkg["package_id"]
+    assert package_id
+    
+    # 2. List packages
+    resp = client.get("/api/packages")
+    assert resp.status_code == 200
+    packages_list = resp.json()
+    assert len(packages_list) >= 1
+    assert any(p["package_id"] == package_id for p in packages_list)
+    
+    # 3. Get package manifest
+    resp = client.get(f"/api/packages/{package_id}/manifest")
+    assert resp.status_code == 200
+    assert resp.json()["project_id"] == project_id
+    
+    # 4. Get package contents
+    resp = client.get(f"/api/packages/{package_id}/contents")
+    assert resp.status_code == 200
+    contents = resp.json()
+    assert len(contents["files"]) >= 3  # manifest.json, knowledge_graph.json, references.json, etc.
+    paths = [f["path"] for f in contents["files"]]
+    assert "manifest.json" in paths
+    assert "graphs/knowledge_graph.json" in paths
+
