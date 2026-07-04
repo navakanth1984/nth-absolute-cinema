@@ -26,6 +26,15 @@ import sys
 from pathlib import Path
 
 import requests
+from dotenv import find_dotenv, load_dotenv
+
+# Provider Orchestration (feat/provider-orchestration): pick up GEMINI_API_KEY /
+# SARVAM_API_KEY / OPENROUTER_API_KEY from a .env file if one exists (searched
+# upward from the current working directory - e.g. the workspace-root .env this
+# repo is developed alongside), without ever overriding a real env var the shell
+# already has set. Never raises if no .env is found; providers stay in their
+# existing "not configured" state, same as before dotenv support existed.
+load_dotenv(find_dotenv(usecwd=True))
 
 SDK_VERSION = "0.1.0"
 
@@ -37,6 +46,7 @@ from engine.kernel.paths import PathResolver
 from engine.storage.db import init_db
 from engine.storage.knowledge_repo import KnowledgeRepo
 from engine.model_manager.fallback_provider import FallbackProvider
+from engine.model_manager.gemini_provider import GeminiNotConfiguredError, GeminiProvider
 from engine.model_manager.mock_provider import MockProvider
 from engine.model_manager.ollama_provider import OllamaNotReachableError, OllamaProvider
 from engine.model_manager.openrouter_provider import (
@@ -45,6 +55,8 @@ from engine.model_manager.openrouter_provider import (
 )
 from engine.model_manager.orchestrator import LlmOrchestrator
 from engine.model_manager.resolver import resolve_provider
+from engine.model_manager.sarvam_tts_provider import SarvamNotConfiguredError, SarvamTtsProvider
+from engine.model_manager.tts_fallback_provider import TtsFallbackProvider
 from engine.model_manager.tts_provider import TtsProvider
 from engine.compilers.story_compiler import StoryCompiler
 from engine.compilers.screenplay_compiler import ScreenplayCompiler
@@ -113,12 +125,13 @@ class Studio:
         self._conn = init_db(db_path)
         self._repo = KnowledgeRepo(self._conn)
         self.last_fallback_events: list[dict] = []
+        self.last_tts_fallback_events: list[dict] = []
         if provider_override is not None:
             self._provider = resolve_provider(ollama_model=model, force=provider_override)
         else:
             self._provider = self._build_fallback_chain(model)
         self._orchestrator = LlmOrchestrator(self._provider)
-        self._tts = TtsProvider()
+        self._tts = self._build_tts_chain()
 
         # Initialize storage providers
         self._storage_registry = StorageRegistry()
@@ -138,13 +151,36 @@ class Studio:
         _ollama_reachable) skips Ollama entirely when it's not actually running,
         and the fallback-chain's OpenRouter instance gets a much shorter timeout
         than the default, since MockProvider is always one hop away as an
-        instant, guaranteed-to-succeed last resort."""
+        instant, guaranteed-to-succeed last resort.
+
+        Provider Orchestration (feat/provider-orchestration): local models run
+        before cloud ones (free, private, no network round-trip). Additional
+        local model tags (e.g. a locally-pulled Gemma or DeepSeek model) are
+        opt-in via NAC_LOCAL_OLLAMA_MODELS (comma-separated Ollama tags, tried
+        in order) - not hardcoded here, since guessing a specific tag someone
+        hasn't actually `ollama pull`-ed would just be a new silent-failure
+        mode. Gemini is added as a second cloud fallback alongside OpenRouter,
+        both optional on their own API key."""
         providers: list = []
         try:
-            if requests.get("http://localhost:11434/api/tags", timeout=1.5).status_code == 200:
-                providers.append(OllamaProvider(model=model))
+            ollama_reachable = (
+                requests.get("http://localhost:11434/api/tags", timeout=1.5).status_code == 200
+            )
         except requests.RequestException:
-            pass  # Ollama not reachable - skip it instead of letting generate() hang on it
+            ollama_reachable = False  # Ollama not reachable - skip it instead of letting generate() hang on it
+
+        if ollama_reachable:
+            local_models = [
+                m.strip()
+                for m in os.environ.get("NAC_LOCAL_OLLAMA_MODELS", model).split(",")
+                if m.strip()
+            ]
+            for local_model in dict.fromkeys(local_models):  # de-dupe, keep order
+                providers.append(OllamaProvider(model=local_model))
+        try:
+            providers.append(GeminiProvider(timeout_s=20.0))
+        except GeminiNotConfiguredError:
+            pass  # no API key configured - later providers are still in the chain
         try:
             providers.append(OpenRouterProvider(timeout_s=15.0))
         except OpenRouterNotConfiguredError:
@@ -157,6 +193,25 @@ class Studio:
             )
 
         return FallbackProvider(providers, on_fallback=on_fallback)
+
+    def _build_tts_chain(self) -> TtsFallbackProvider:
+        """Sarvam (cloud, higher-quality/multilingual) tried first when
+        SARVAM_API_KEY is configured, falling back to the offline pyttsx3
+        TtsProvider - which always succeeds, so this chain can never leave a
+        caller with no TTS backend at all."""
+        backends: list = []
+        try:
+            backends.append(SarvamTtsProvider())
+        except SarvamNotConfiguredError:
+            pass  # no API key configured - pyttsx3 is still in the chain
+        backends.append(TtsProvider())
+
+        def on_fallback(backend, error: Exception) -> None:
+            self.last_tts_fallback_events.append(
+                {"skipped_backend": type(backend).__name__, "error": str(error)}
+            )
+
+        return TtsFallbackProvider(backends, on_fallback=on_fallback)
 
     def create_project(self, idea_text: str, target_runtime_minutes: int = 15) -> str:
         return self._repo.create_story(idea_text, target_runtime_minutes=target_runtime_minutes)
@@ -284,6 +339,8 @@ class Studio:
             "sqlite": "ok" if sqlite_ok else "error",
             "ollama": "reachable" if ollama_reachable else "unreachable",
             "openrouter": "configured" if os.environ.get("OPENROUTER_API_KEY") else "not configured",
+            "gemini": "configured" if os.environ.get("GEMINI_API_KEY") else "not configured",
+            "sarvam": "configured" if os.environ.get("SARVAM_API_KEY") else "not configured",
             "disk": disk,
             "gpu": gpu_name,
             "capabilities": self.get_capabilities(),
@@ -332,12 +389,23 @@ class Studio:
         just the first in the chain), plus any fallback events recorded since
         this Studio was constructed."""
         if isinstance(self._provider, FallbackProvider):
-            return {
+            info = {
                 "llm_provider": self._provider.active_provider_name,
                 "fallback_chain": self._provider.provider_chain_names,
                 "fallback_events": list(self.last_fallback_events),
             }
-        return {"llm_provider": type(self._provider).__name__, "fallback_chain": None, "fallback_events": []}
+        else:
+            info = {"llm_provider": type(self._provider).__name__, "fallback_chain": None, "fallback_events": []}
+
+        if isinstance(self._tts, TtsFallbackProvider):
+            info["tts_provider"] = self._tts.active_backend_name
+            info["tts_fallback_chain"] = self._tts.backend_chain_names
+            info["tts_fallback_events"] = list(self.last_tts_fallback_events)
+        else:
+            info["tts_provider"] = type(self._tts).__name__
+            info["tts_fallback_chain"] = None
+            info["tts_fallback_events"] = []
+        return info
 
     def list_projects(self) -> list[dict]:
         """Sprint 2A: passthrough to KnowledgeRepo.list_stories() for the Director
