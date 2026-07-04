@@ -3,7 +3,7 @@ name = "nac"
 version = "0.1.0"
 description = "Nth Absolute Cinema - Creative Operating System SDK"
 requires-python = ">=3.12"
-dependencies = ["requests>=2.31", "pyttsx3>=2.90"]
+dependencies = ["requests>=2.31", "pyttsx3>=2.90", "fastapi>=0.115", "uvicorn[standard]>=0.30", "python-multipart>=0.0.9"]
 
 [project.scripts]
 nac = "cli.__main__:main"
@@ -14,7 +14,7 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
 packages = [
-    "nac", "cli",
+    "nac", "cli", "dashboard",
     "engine", "engine.kernel", "engine.storage", "engine.model_manager",
     "engine.compilers", "engine.packs", "engine.extensions", "engine.portability",
 ]

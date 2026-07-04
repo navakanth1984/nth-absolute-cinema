@@ -118,6 +118,9 @@ def main() -> None:
     import_p.add_argument("file_path")
     import_p.add_argument("--provider", choices=["ollama", "openrouter", "mock"], default=None)
 
+    studio_p = sub.add_parser("studio", help="Launch the Director Studio UI (Sprint 2A)")
+    studio_p.add_argument("--port", type=int, default=8420)
+
     args = parser.parse_args()
 
     try:
@@ -148,6 +151,14 @@ def main() -> None:
                 args.capability,
                 args.file_path,
             )
+        elif args.command == "studio":
+            import os
+
+            import uvicorn
+
+            os.environ["NAC_STUDIO_PORT"] = str(args.port)
+            print(f"NAC Director Studio starting at http://localhost:{args.port}")
+            uvicorn.run("dashboard.server:app", host="127.0.0.1", port=args.port)
     except OllamaNotReachableError as e:
         print(f"\nERROR: {e}", file=sys.stderr)
         sys.exit(1)

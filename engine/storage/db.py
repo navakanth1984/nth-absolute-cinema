@@ -48,8 +48,13 @@ CREATE TABLE IF NOT EXISTS assets (
 
 
 def init_db(db_path: Path) -> sqlite3.Connection:
+    """check_same_thread=False: Sprint 2A's dashboard server holds one Studio (and
+    therefore one connection) for the process lifetime, but FastAPI dispatches sync
+    route handlers to a threadpool - a new thread per request. sqlite3 still
+    serializes actual access internally, so this is safe for our single-connection,
+    no-concurrent-write-conflict usage; it does not change on-disk format or SQL."""
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(db_path)
+    conn = sqlite3.connect(db_path, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.executescript(SCHEMA)
     conn.commit()
