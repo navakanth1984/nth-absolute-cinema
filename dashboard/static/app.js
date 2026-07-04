@@ -892,6 +892,12 @@ async function renderDiagnosticsWorkspace() {
     ${row("Active provider (last call)", d.provider.llm_provider)}
     ${d.provider.fallback_chain ? row("Fallback chain", d.provider.fallback_chain.join(" → ")) : ""}
     
+    <div class="section-title">Voice Providers</div>
+    ${row("ElevenLabs", d.elevenlabs, d.elevenlabs === "configured")}
+    ${row("Sarvam", d.sarvam, d.sarvam === "configured")}
+    ${row("Active voice provider", d.provider.tts_provider || "unknown")}
+    ${d.provider.tts_fallback_chain ? row("Voice fallback chain", d.provider.tts_fallback_chain.join(" → ")) : ""}
+    
     <div class="section-title">Active Repository Storage</div>
     ${row("Active Provider", d.storage.active_provider)}
     ${row("Local Package Path", d.storage.providers.find(p => p.name === "local")?.base_dir || "unknown")}
@@ -901,8 +907,12 @@ async function renderDiagnosticsWorkspace() {
     ${graphHealthHtml}
 
     ${d.provider.fallback_events && d.provider.fallback_events.length ? `
-      <div class="section-title">Fallback Events (this session)</div>
+      <div class="section-title">LLM Fallback Events (this session)</div>
       ${d.provider.fallback_events.map((e) => `<div class="history-item verdict-needs_revision">${escapeHtml(e.skipped_provider)} skipped: ${escapeHtml(e.error)}</div>`).join("")}
+    ` : ""}
+    ${d.provider.tts_fallback_events && d.provider.tts_fallback_events.length ? `
+      <div class="section-title">Voice Fallback Events (this session)</div>
+      ${d.provider.tts_fallback_events.map((e) => `<div class="history-item verdict-needs_revision">${escapeHtml(e.skipped_backend)} skipped: ${escapeHtml(e.error)}</div>`).join("")}
     ` : ""}
     <div class="section-title">Capabilities (Registry - display only)</div>
     ${d.capabilities.map((c) => row(`${c.capability} (${c.provider_id})`, c.available ? "available" : "not integrated", c.available)).join("")}

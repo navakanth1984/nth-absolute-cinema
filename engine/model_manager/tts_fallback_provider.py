@@ -11,9 +11,11 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Protocol
 
+from engine.model_manager.provider_protocol import VoiceRequest, VoiceResponse
+
 
 class TtsBackend(Protocol):
-    def synthesize(self, text: str, out_path: Path) -> Path:
+    def synthesize(self, request: str | VoiceRequest, out_path: Path) -> VoiceResponse:
         ...
 
 
@@ -37,11 +39,11 @@ class TtsFallbackProvider:
     def backend_chain_names(self) -> list[str]:
         return [type(b).__name__ for b in self._backends]
 
-    def synthesize(self, text: str, out_path: Path) -> Path:
+    def synthesize(self, request: str | VoiceRequest, out_path: Path) -> VoiceResponse:
         last_error: Exception | None = None
         for backend in self._backends:
             try:
-                result = backend.synthesize(text, out_path)
+                result = backend.synthesize(request, out_path)
             except Exception as e:  # noqa: BLE001 - any backend failure falls through to the next
                 last_error = e
                 if self._on_fallback is not None:
@@ -51,3 +53,4 @@ class TtsFallbackProvider:
             return result
         assert last_error is not None
         raise last_error
+

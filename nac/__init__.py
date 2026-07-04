@@ -56,6 +56,7 @@ from engine.model_manager.openrouter_provider import (
 from engine.model_manager.orchestrator import LlmOrchestrator
 from engine.model_manager.resolver import resolve_provider
 from engine.model_manager.sarvam_tts_provider import SarvamNotConfiguredError, SarvamTtsProvider
+from engine.model_manager.elevenlabs_provider import ElevenLabsNotConfiguredError, ElevenLabsProvider
 from engine.model_manager.tts_fallback_provider import TtsFallbackProvider
 from engine.model_manager.tts_provider import TtsProvider
 from engine.compilers.story_compiler import StoryCompiler
@@ -104,7 +105,12 @@ class Studio:
     real right now versus what's coming, rather than silently no-op-ing.
     """
 
-    def __init__(self, model: str = "gemma2:9b", provider_override: str | None = None) -> None:
+    def __init__(
+        self,
+        model: str = "gemma2:9b",
+        provider_override: str | None = None,
+        voice_override: str | None = None,
+    ) -> None:
         """provider_override: "ollama" | "openrouter" | "mock" to bypass the
         auto-detection fallback chain and pin to exactly that provider (used by
         tests and explicit CLI --provider flags - no runtime fallback in this mode,
@@ -131,7 +137,7 @@ class Studio:
         else:
             self._provider = self._build_fallback_chain(model)
         self._orchestrator = LlmOrchestrator(self._provider)
-        self._tts = self._build_tts_chain()
+        self._tts = self._build_tts_chain(voice_override=voice_override)
 
         # Initialize storage providers
         self._storage_registry = StorageRegistry()
@@ -194,12 +200,25 @@ class Studio:
 
         return FallbackProvider(providers, on_fallback=on_fallback)
 
-    def _build_tts_chain(self) -> TtsFallbackProvider:
-        """Sarvam (cloud, higher-quality/multilingual) tried first when
-        SARVAM_API_KEY is configured, falling back to the offline pyttsx3
-        TtsProvider - which always succeeds, so this chain can never leave a
-        caller with no TTS backend at all."""
+    def _build_tts_chain(self, voice_override: str | None = None) -> TtsFallbackProvider:
+        """Builds the TTS fallback chain: ElevenLabs -> Sarvam -> pyttsx3.
+        Supports explicit override via voice_override parameter or NAC_VOICE_PROVIDER_OVERRIDE env var."""
+        override = voice_override or os.environ.get("NAC_VOICE_PROVIDER_OVERRIDE")
+        if override:
+            override = override.lower().strip()
+            if override in ("elevenlabs", "eleven_labs"):
+                return TtsFallbackProvider([ElevenLabsProvider()])
+            if override == "sarvam":
+                return TtsFallbackProvider([SarvamTtsProvider()])
+            if override in ("pyttsx3", "local"):
+                return TtsFallbackProvider([TtsProvider()])
+            raise ValueError(f"Unknown voice provider override: {override}")
+
         backends: list = []
+        try:
+            backends.append(ElevenLabsProvider())
+        except ElevenLabsNotConfiguredError:
+            pass  # no API key configured - later providers are still in the chain
         try:
             backends.append(SarvamTtsProvider())
         except SarvamNotConfiguredError:
@@ -341,6 +360,7 @@ class Studio:
             "openrouter": "configured" if os.environ.get("OPENROUTER_API_KEY") else "not configured",
             "gemini": "configured" if os.environ.get("GEMINI_API_KEY") else "not configured",
             "sarvam": "configured" if os.environ.get("SARVAM_API_KEY") else "not configured",
+            "elevenlabs": "configured" if os.environ.get("ELEVENLABS_API_KEY") else "not configured",
             "disk": disk,
             "gpu": gpu_name,
             "capabilities": self.get_capabilities(),

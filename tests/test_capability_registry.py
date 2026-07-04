@@ -11,10 +11,10 @@ def test_resolve_motion_poster_is_ui_execution_and_available():
     assert entry.available is True
 
 
-def test_resolve_narration_premium_is_registered_but_unavailable():
+def test_resolve_narration_premium_is_registered_and_available():
     entry = resolve_capability("narration_premium")
     assert entry.execution_mode == ExecutionMode.API
-    assert entry.available is False
+    assert entry.available is True
 
 
 def test_resolve_unknown_capability_raises():

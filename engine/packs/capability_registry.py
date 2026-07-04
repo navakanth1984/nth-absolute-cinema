@@ -50,7 +50,7 @@ CAPABILITY_REGISTRY: dict[str, CapabilityEntry] = {
         provider_id="elevenlabs",
         execution_mode=ExecutionMode.API,
         supports=("narration", "dialogue"),
-        available=False,  # not integrated yet - registered so a future pack needs no redesign
+        available=True,  # ElevenLabs is now fully integrated as an API provider
     ),
     "soundtrack": CapabilityEntry(
         provider_id="google_flow_music",
