@@ -52,6 +52,7 @@ from engine.compilers.audio_compiler import AudioCompiler
 from engine.compilers.prompt_compiler import PromptCompiler
 from engine.portability.export import export_project
 from engine.portability.snapshot import Snapshot, SnapshotManifest, SnapshotManager
+from engine.portability.serializer import NacSerializer, NacDeserializer
 from engine.packs.capability_registry import CAPABILITY_REGISTRY
 
 __all__ = [
@@ -61,6 +62,8 @@ __all__ = [
     "Snapshot",
     "SnapshotManifest",
     "SnapshotManager",
+    "NacSerializer",
+    "NacDeserializer",
 ]
 
 _STAGE_DISPATCH = {

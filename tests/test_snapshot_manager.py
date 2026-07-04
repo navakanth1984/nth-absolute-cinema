@@ -1,13 +1,12 @@
-import hashlib
 import sqlite3
 import time
 import uuid
 from dataclasses import replace
 from datetime import datetime, timezone
-from typing import Generator
 
 import pytest
 
+from engine.storage.knowledge_repo import KnowledgeRepo
 from engine.portability.snapshot import Snapshot, SnapshotManifest, SnapshotManager
 
 
@@ -23,7 +22,7 @@ def clean_conn() -> sqlite3.Connection:
 
 
 def populate_demo_project(conn: sqlite3.Connection, project_id: str) -> None:
-    """Helper to populate a test database with project details."""
+    """Helper to populate a test database with project details using SQL directly."""
     created_at = datetime.now(timezone.utc).isoformat()
     conn.execute(
         "INSERT INTO story (id, idea_text, target_runtime_minutes, story_bible, screenplay, created_at) "
@@ -74,6 +73,7 @@ class TestSnapshotManager:
 
     def test_empty_project_snapshot(self, clean_conn: sqlite3.Connection) -> None:
         manager = SnapshotManager()
+        repo = KnowledgeRepo(clean_conn)
         project_id = str(uuid.uuid4())
         created_at = datetime.now(timezone.utc).isoformat()
 
@@ -84,7 +84,7 @@ class TestSnapshotManager:
         )
         clean_conn.commit()
 
-        snapshot = manager.create_snapshot(clean_conn, project_id)
+        snapshot = manager.create_snapshot(repo, project_id)
 
         assert snapshot.manifest.project_id == project_id
         assert snapshot.story["idea_text"] == "A lone warrior's quest."
@@ -99,38 +99,56 @@ class TestSnapshotManager:
 
     def test_populated_project_snapshot(self, clean_conn: sqlite3.Connection) -> None:
         manager = SnapshotManager()
+        repo = KnowledgeRepo(clean_conn)
         project_id = str(uuid.uuid4())
         populate_demo_project(clean_conn, project_id)
 
         snapshot = manager.create_snapshot(
-            clean_conn,
+            repo,
             project_id,
             compiler_versions={"story": "1.0.0"},
             pack_versions={"flow": "1.2.0"},
+            provider_metadata={"provider": "mock"},
+            environment_metadata={"os": "Windows"},
             runtime_config={"profile": "Standard"},
         )
 
         assert snapshot.manifest.project_id == project_id
+        assert snapshot.manifest.engine_version == "0.1.0"
+        assert snapshot.manifest.sdk_version == "0.1.0"
+        assert snapshot.manifest.graph_spec_version == "1.2"
+        assert snapshot.manifest.genome_spec_version == "1.2"
         assert snapshot.manifest.compiler_versions == {"story": "1.0.0"}
         assert snapshot.manifest.pack_versions == {"flow": "1.2.0"}
+        assert snapshot.manifest.provider_metadata == {"provider": "mock"}
+        assert snapshot.manifest.environment_metadata == {"os": "Windows"}
         assert snapshot.manifest.runtime_config == {"profile": "Standard"}
         assert len(snapshot.compiler_metrics) == 2
         assert len(snapshot.review_log) == 2
         assert len(snapshot.assets) == 2
+
+        # Verify hierarchical hashes are set
+        assert "story" in snapshot.manifest.component_hashes
+        assert "compiler_metrics" in snapshot.manifest.component_hashes
+        assert "review_log" in snapshot.manifest.component_hashes
+        assert "assets" in snapshot.manifest.component_hashes
+        assert "genomes" in snapshot.manifest.component_hashes
 
         assert manager.validate_snapshot(snapshot) == []
         assert manager.verify_snapshot(snapshot) is True
 
     def test_deterministic_snapshots(self, clean_conn: sqlite3.Connection) -> None:
         manager = SnapshotManager()
+        repo = KnowledgeRepo(clean_conn)
         project_id = str(uuid.uuid4())
         populate_demo_project(clean_conn, project_id)
 
-        snap1 = manager.create_snapshot(clean_conn, project_id)
-        snap2 = manager.create_snapshot(clean_conn, project_id)
+        snap1 = manager.create_snapshot(repo, project_id)
+        snap2 = manager.create_snapshot(repo, project_id)
 
         # Core data hashes must be identical since database content is identical
         assert snap1.manifest.data_hash == snap2.manifest.data_hash
+        assert snap1.manifest.component_hashes == snap2.manifest.component_hashes
         assert snap1.story == snap2.story
         assert snap1.compiler_metrics == snap2.compiler_metrics
         assert snap1.review_log == snap2.review_log
@@ -141,10 +159,11 @@ class TestSnapshotManager:
 
     def test_verify_snapshot_tamper_detection(self, clean_conn: sqlite3.Connection) -> None:
         manager = SnapshotManager()
+        repo = KnowledgeRepo(clean_conn)
         project_id = str(uuid.uuid4())
         populate_demo_project(clean_conn, project_id)
 
-        snapshot = manager.create_snapshot(clean_conn, project_id)
+        snapshot = manager.create_snapshot(repo, project_id)
         assert manager.verify_snapshot(snapshot) is True
 
         # Mutate the story (tamper with data)
@@ -157,10 +176,11 @@ class TestSnapshotManager:
 
     def test_snapshot_diff(self, clean_conn: sqlite3.Connection) -> None:
         manager = SnapshotManager()
+        repo = KnowledgeRepo(clean_conn)
         project_id = str(uuid.uuid4())
         populate_demo_project(clean_conn, project_id)
 
-        snap1 = manager.create_snapshot(clean_conn, project_id)
+        snap1 = manager.create_snapshot(repo, project_id)
 
         # 1. Update story screenplay
         clean_conn.execute(
@@ -191,7 +211,7 @@ class TestSnapshotManager:
         )
         clean_conn.commit()
 
-        snap2 = manager.create_snapshot(clean_conn, project_id)
+        snap2 = manager.create_snapshot(repo, project_id)
 
         diff = manager.diff_snapshots(snap1, snap2)
 
@@ -224,10 +244,11 @@ class TestSnapshotManager:
 
     def test_snapshot_validation_failures(self, clean_conn: sqlite3.Connection) -> None:
         manager = SnapshotManager()
+        repo = KnowledgeRepo(clean_conn)
         project_id = str(uuid.uuid4())
         populate_demo_project(clean_conn, project_id)
 
-        snapshot = manager.create_snapshot(clean_conn, project_id)
+        snapshot = manager.create_snapshot(repo, project_id)
         assert manager.validate_snapshot(snapshot) == []
 
         # 1. Invalid manifest UUIDs
@@ -241,89 +262,43 @@ class TestSnapshotManager:
         violations2 = manager.validate_snapshot(bad_snap2)
         assert any("snapshot_id 'not-a-uuid' is not a valid UUID" in v for v in violations2)
 
-        # 2. Invalid story created_at format
+        # 2. Empty component hashes
+        bad_manifest3 = replace(snapshot.manifest, component_hashes={})
+        bad_snap3 = replace(snapshot, manifest=bad_manifest3)
+        violations3 = manager.validate_snapshot(bad_snap3)
+        assert any("component_hashes dictionary is empty or missing" in v for v in violations3)
+
+        # 3. Invalid story created_at format
         bad_story = dict(snapshot.story)
         bad_story["created_at"] = "invalid-date-format"
-        bad_snap3 = replace(snapshot, story=bad_story)
-        violations3 = manager.validate_snapshot(bad_snap3)
-        assert any("created_at 'invalid-date-format' is not a valid ISO 8601 string" in v for v in violations3)
+        bad_snap4 = replace(snapshot, story=bad_story)
+        violations4 = manager.validate_snapshot(bad_snap4)
+        assert any("created_at 'invalid-date-format' is not a valid ISO 8601 string" in v for v in violations4)
 
-        # 3. Mismatched compiler metrics story_id
+        # 4. Mismatched compiler metrics story_id
         bad_metrics = [dict(m) for m in snapshot.compiler_metrics]
         bad_metrics[0]["story_id"] = str(uuid.uuid4())
-        bad_snap4 = replace(snapshot, compiler_metrics=bad_metrics)
-        violations4 = manager.validate_snapshot(bad_snap4)
-        assert any("compiler_metrics[0] story_id does not match project_id" in v for v in violations4)
+        bad_snap5 = replace(snapshot, compiler_metrics=bad_metrics)
+        violations5 = manager.validate_snapshot(bad_snap5)
+        assert any("compiler_metrics[0] story_id does not match project_id" in v for v in violations5)
 
-        # 4. Invalid review verdict
+        # 5. Invalid review verdict
         bad_reviews = [dict(r) for r in snapshot.review_log]
         bad_reviews[0]["verdict"] = "super-approved"
-        bad_snap5 = replace(snapshot, review_log=bad_reviews)
-        violations5 = manager.validate_snapshot(bad_snap5)
-        assert any("review_log[0] has invalid verdict: 'super-approved'" in v for v in violations5)
+        bad_snap6 = replace(snapshot, review_log=bad_reviews)
+        violations6 = manager.validate_snapshot(bad_snap6)
+        assert any("review_log[0] has invalid verdict: 'super-approved'" in v for v in violations6)
 
-        # 5. Invalid asset content_hash length
+        # 6. Invalid asset content_hash length
         bad_assets = [dict(a) for a in snapshot.assets]
         bad_assets[0]["content_hash"] = "short-hash"
-        bad_snap6 = replace(snapshot, assets=bad_assets)
-        violations6 = manager.validate_snapshot(bad_snap6)
-        assert any("content_hash must be a valid 64-character SHA-256 hash" in v for v in violations6)
-
-    def test_restore_in_memory(self, clean_conn: sqlite3.Connection) -> None:
-        manager = SnapshotManager()
-        project_id = str(uuid.uuid4())
-        populate_demo_project(clean_conn, project_id)
-
-        snapshot = manager.create_snapshot(clean_conn, project_id)
-
-        # Create a second, empty database
-        restore_conn = sqlite3.connect(":memory:")
-        restore_conn.row_factory = sqlite3.Row
-        from engine.storage.db import SCHEMA
-        restore_conn.executescript(SCHEMA)
-        restore_conn.commit()
-
-        # Restore snapshot to the empty connection
-        manager.restore_in_memory(snapshot, restore_conn)
-
-        # Verify story restored
-        restored_story = restore_conn.execute("SELECT * FROM story WHERE id = ?", (project_id,)).fetchone()
-        assert dict(restored_story)["idea_text"] == "A cinematic space odyssey."
-
-        # Verify compiler metrics restored
-        restored_metrics = restore_conn.execute("SELECT * FROM compiler_metrics WHERE story_id = ?", (project_id,)).fetchall()
-        assert len(restored_metrics) == 2
-        assert "story" in [m["compiler"] for m in restored_metrics]
-
-        # Verify reviews restored
-        restored_reviews = restore_conn.execute("SELECT * FROM review_log WHERE story_id = ?", (project_id,)).fetchall()
-        assert len(restored_reviews) == 2
-        assert "approved" in [r["verdict"] for r in restored_reviews]
-
-        # Verify assets restored
-        restored_assets = restore_conn.execute("SELECT * FROM assets WHERE story_id = ?", (project_id,)).fetchall()
-        assert len(restored_assets) == 2
-        assert "projects/audio.wav" in [a["file_path"] for a in restored_assets]
-
-    def test_restore_tampered_raises_value_error(self, clean_conn: sqlite3.Connection) -> None:
-        manager = SnapshotManager()
-        project_id = str(uuid.uuid4())
-        populate_demo_project(clean_conn, project_id)
-
-        snapshot = manager.create_snapshot(clean_conn, project_id)
-
-        # Mutate the story (tamper it)
-        bad_story = dict(snapshot.story)
-        bad_story["idea_text"] = "tampered text"
-        tampered_snapshot = replace(snapshot, story=bad_story)
-
-        # Restore should fail due to failed integrity verification check
-        with pytest.raises(ValueError) as exc:
-            manager.restore_in_memory(tampered_snapshot, clean_conn)
-        assert "integrity verification check failed" in str(exc.value)
+        bad_snap7 = replace(snapshot, assets=bad_assets)
+        violations7 = manager.validate_snapshot(bad_snap7)
+        assert any("content_hash must be a valid 64-character SHA-256 hash" in v for v in violations7)
 
     def test_performance_check(self, clean_conn: sqlite3.Connection) -> None:
         manager = SnapshotManager()
+        repo = KnowledgeRepo(clean_conn)
         project_id = str(uuid.uuid4())
 
         # Populate with 1 story, 10 compiler metrics, 10 reviews, and 50 assets
@@ -350,7 +325,7 @@ class TestSnapshotManager:
 
         # Measure snapshot creation
         start_time = time.perf_counter()
-        snapshot = manager.create_snapshot(clean_conn, project_id)
+        snapshot = manager.create_snapshot(repo, project_id)
         creation_duration = (time.perf_counter() - start_time) * 1000
 
         # Assert creation runs within a performant constraint (< 25ms)

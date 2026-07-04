@@ -8,20 +8,23 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
-import sqlite3
-
 
 @dataclass(frozen=True)
 class SnapshotManifest:
-    """Metadata describing a snapshot."""
+    """Metadata describing a snapshot, expanded to include environment, provider, and spec metadata."""
     project_id: str
     snapshot_id: str
-    data_hash: str
-    snapshot_schema_version: str = "1.0"
+    data_hash: str                  # Master hash
+    component_hashes: dict[str, str]  # Hierarchical hashes (story, metrics, etc.)
+    engine_version: str = "0.1.0"
+    sdk_version: str = "0.1.0"
     graph_spec_version: str = "1.2"
+    genome_spec_version: str = "1.2"
     created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     compiler_versions: dict[str, str] = field(default_factory=dict)
     pack_versions: dict[str, str] = field(default_factory=dict)
+    provider_metadata: dict[str, Any] = field(default_factory=dict)
+    environment_metadata: dict[str, Any] = field(default_factory=dict)
     runtime_config: dict[str, Any] = field(default_factory=dict)
 
 
@@ -38,83 +41,90 @@ class Snapshot:
 
 
 class SnapshotManager:
-    """Manages the creation, validation, verification, diffing, and restoration of Snapshots."""
+    """Manages the creation, validation, verification, and diffing of Snapshots."""
 
     @staticmethod
-    def _compute_data_hash(
+    def _compute_hash(data: Any) -> str:
+        """Helper to serialize and SHA-256 hash any object deterministically."""
+        serialized = json.dumps(data, sort_keys=True, default=str)
+        return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+    @classmethod
+    def compute_hierarchical_hashes(
+        cls,
         story: dict[str, Any],
         compiler_metrics: list[dict[str, Any]],
         review_log: list[dict[str, Any]],
         assets: list[dict[str, Any]],
         genomes: dict[str, Any]
-    ) -> str:
-        """Deterministically hashes the core data of the snapshot to guarantee integrity."""
-        # Sort lists of dicts by their unique IDs (or all items) for determinism
-        metrics_sorted = sorted(compiler_metrics, key=lambda x: x.get("id", ""))
-        reviews_sorted = sorted(review_log, key=lambda x: x.get("id", ""))
-        assets_sorted = sorted(assets, key=lambda x: x.get("id", ""))
+    ) -> dict[str, str]:
+        """Computes hierarchical hashes for all individual components, combining them into a master hash."""
+        story_hash = cls._compute_hash(story)
+        metrics_hash = cls._compute_hash(sorted(compiler_metrics, key=lambda x: x.get("id", "")))
+        reviews_hash = cls._compute_hash(sorted(review_log, key=lambda x: x.get("id", "")))
+        assets_hash = cls._compute_hash(sorted(assets, key=lambda x: x.get("id", "")))
+        genomes_hash = cls._compute_hash(genomes)
 
-        data_to_hash = {
-            "story": story,
-            "compiler_metrics": metrics_sorted,
-            "review_log": reviews_sorted,
-            "assets": assets_sorted,
-            "genomes": genomes,
+        component_hashes = {
+            "story": story_hash,
+            "compiler_metrics": metrics_hash,
+            "review_log": reviews_hash,
+            "assets": assets_hash,
+            "genomes": genomes_hash,
         }
 
-        # Deterministic serialization: sorted keys, string representation for non-JSON objects
-        serialized = json.dumps(data_to_hash, sort_keys=True, default=str)
-        return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+        master_hash = cls._compute_hash(component_hashes)
+
+        return {
+            "story": story_hash,
+            "compiler_metrics": metrics_hash,
+            "review_log": reviews_hash,
+            "assets": assets_hash,
+            "genomes": genomes_hash,
+            "master": master_hash,
+        }
 
     def create_snapshot(
         self,
-        conn: sqlite3.Connection,
+        repo: Any,  # KnowledgeRepo or matching duck-typed repository abstraction
         project_id: str,
         compiler_versions: dict[str, str] | None = None,
         pack_versions: dict[str, str] | None = None,
+        provider_metadata: dict[str, Any] | None = None,
+        environment_metadata: dict[str, Any] | None = None,
         runtime_config: dict[str, Any] | None = None
     ) -> Snapshot:
-        """Query the SQLite database for a project's tables and construct a Snapshot."""
-        # 1. Fetch story record
-        story_row = conn.execute(
-            "SELECT * FROM story WHERE id = ?", (project_id,)
-        ).fetchone()
-        if story_row is None:
-            raise KeyError(f"Project story '{project_id}' not found in database.")
-        story = dict(story_row)
+        """Query the repository abstraction for project tables and construct a Snapshot."""
+        # 1. Fetch story record from repository
+        story = repo.get_story(project_id)
 
-        # 2. Fetch compiler metrics
-        metrics_rows = conn.execute(
-            "SELECT * FROM compiler_metrics WHERE story_id = ?", (project_id,)
-        ).fetchall()
-        compiler_metrics = [dict(r) for r in metrics_rows]
+        # 2. Fetch compiler metrics from repository
+        compiler_metrics = repo.get_compiler_metrics(project_id)
 
-        # 3. Fetch reviews
-        review_rows = conn.execute(
-            "SELECT * FROM review_log WHERE story_id = ?", (project_id,)
-        ).fetchall()
-        review_log = [dict(r) for r in review_rows]
+        # 3. Fetch reviews from repository
+        review_log = repo.get_reviews(project_id)
 
-        # 4. Fetch assets
-        asset_rows = conn.execute(
-            "SELECT * FROM assets WHERE story_id = ?", (project_id,)
-        ).fetchall()
-        assets = [dict(r) for r in asset_rows]
+        # 4. Fetch assets from repository
+        assets = repo.get_assets(project_id)
 
-        # Genomes are currently not stored in separate tables ( Sprint 2B is not started).
-        # We model them as an empty dict structure for spec completeness.
+        # Genomes modeled as empty dict structure for spec completeness (Sprint 2B not started)
         genomes: dict[str, Any] = {}
 
-        # 5. Compute deterministic data hash
-        data_hash = self._compute_data_hash(story, compiler_metrics, review_log, assets, genomes)
+        # 5. Compute deterministic hierarchical hashes
+        hashes = self.compute_hierarchical_hashes(story, compiler_metrics, review_log, assets, genomes)
+        master_hash = hashes["master"]
+        component_hashes = {k: v for k, v in hashes.items() if k != "master"}
 
         # 6. Build Manifest
         manifest = SnapshotManifest(
             project_id=project_id,
             snapshot_id=str(uuid.uuid4()),
-            data_hash=data_hash,
+            data_hash=master_hash,
+            component_hashes=component_hashes,
             compiler_versions=compiler_versions or {},
             pack_versions=pack_versions or {},
+            provider_metadata=provider_metadata or {},
+            environment_metadata=environment_metadata or {},
             runtime_config=runtime_config or {},
         )
 
@@ -143,6 +153,10 @@ class SnapshotManager:
             uuid.UUID(snapshot.manifest.snapshot_id)
         except ValueError:
             violations.append(f"Manifest snapshot_id '{snapshot.manifest.snapshot_id}' is not a valid UUID.")
+
+        # Validate that hierarchical hashes dict is present
+        if not snapshot.manifest.component_hashes:
+            violations.append("Manifest component_hashes dictionary is empty or missing.")
 
         # 2. Validate story node
         story = snapshot.story
@@ -190,15 +204,22 @@ class SnapshotManager:
         return violations
 
     def verify_snapshot(self, snapshot: Snapshot) -> bool:
-        """Cryptographically verifies data integrity of the snapshot against its manifest hash."""
-        recomputed_hash = self._compute_data_hash(
+        """Hierarchically verifies data integrity of the snapshot against manifest component/master hashes."""
+        hashes = self.compute_hierarchical_hashes(
             snapshot.story,
             snapshot.compiler_metrics,
             snapshot.review_log,
             snapshot.assets,
             snapshot.genomes,
         )
-        return recomputed_hash == snapshot.manifest.data_hash
+
+        # 1. Verify component sub-hashes
+        for k, v in snapshot.manifest.component_hashes.items():
+            if hashes.get(k) != v:
+                return False
+
+        # 2. Verify combined master hash
+        return hashes["master"] == snapshot.manifest.data_hash
 
     def diff_snapshots(self, snap1: Snapshot, snap2: Snapshot) -> dict[str, Any]:
         """Produce a detailed, structured diff comparing two snapshots.
@@ -273,63 +294,3 @@ class SnapshotManager:
                 "modified": modified_assets,
             },
         }
-
-    def restore_in_memory(self, snapshot: Snapshot, conn: sqlite3.Connection) -> None:
-        """Restores the snapshot data back into SQLite tables of the specified connection.
-        Performs an overwrite restore by clearing prior data associated with the project_id.
-        """
-        project_id = snapshot.manifest.project_id
-
-        # Verify integrity before starting restore
-        if not self.verify_snapshot(snapshot):
-            raise ValueError("Cannot restore snapshot: integrity verification check failed (data hash mismatch).")
-
-        # 1. Clear existing data
-        conn.execute("DELETE FROM assets WHERE story_id = ?", (project_id,))
-        conn.execute("DELETE FROM review_log WHERE story_id = ?", (project_id,))
-        conn.execute("DELETE FROM compiler_metrics WHERE story_id = ?", (project_id,))
-        conn.execute("DELETE FROM story WHERE id = ?", (project_id,))
-
-        # 2. Insert story
-        s = snapshot.story
-        conn.execute(
-            "INSERT INTO story (id, idea_text, target_runtime_minutes, story_bible, screenplay, audio_path, motion_poster_prompt, graph_spec_version, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (
-                s["id"],
-                s["idea_text"],
-                s["target_runtime_minutes"],
-                s.get("story_bible"),
-                s.get("screenplay"),
-                s.get("audio_path"),
-                s.get("motion_poster_prompt"),
-                s.get("graph_spec_version", "1.0"),
-                s["created_at"],
-            ),
-        )
-
-        # 3. Insert compiler metrics
-        for m in snapshot.compiler_metrics:
-            conn.execute(
-                "INSERT INTO compiler_metrics (id, story_id, compiler, metrics_json, created_at) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (m["id"], m["story_id"], m["compiler"], m["metrics_json"], m["created_at"]),
-            )
-
-        # 4. Insert review log
-        for r in snapshot.review_log:
-            conn.execute(
-                "INSERT INTO review_log (id, story_id, stage, verdict, comment, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                (r["id"], r["story_id"], r["stage"], r["verdict"], r.get("comment"), r["created_at"]),
-            )
-
-        # 5. Insert assets
-        for a in snapshot.assets:
-            conn.execute(
-                "INSERT INTO assets (id, story_id, capability, file_path, content_hash, source, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (a["id"], a["story_id"], a["capability"], a["file_path"], a["content_hash"], a.get("source", "manual_import"), a["created_at"]),
-            )
-
-        conn.commit()
