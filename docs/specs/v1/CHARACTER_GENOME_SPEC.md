@@ -1,23 +1,37 @@
-# NAC Character Genome Specification v1.1
+# NAC Character Genome Specification v1.2
 
 **Status:** FROZEN (2026-07-04)
 **Governed by:** `MANIFESTO.md` principles 1, 2, 8; `CREATIVE_GRAPH_SPEC.md` §4
-(Style Genome schema); `VERSIONING_POLICY.md`.
+(Style Genome schema, Genome Composition Rule); `VERSIONING_POLICY.md`.
 **Relationship to CREATIVE_GRAPH_SPEC.md:** this is a MINOR (additive,
 backward-compatible) expansion of the `CharacterGenome` stub frozen in
-`CREATIVE_GRAPH_SPEC.md` §4 (graph-spec 1.0 → 1.1). No field defined there is
+`CREATIVE_GRAPH_SPEC.md` §4 (graph-spec 1.0 → 1.2). No field defined there is
 removed or renamed - see §8 (Migration from graph-spec 1.0) for the exact
 mapping. `VisualGenome`, `DialogueGenome`, and `CostumeGenome` remain
 independently-versioned, independently-referenced node types exactly as
 `CREATIVE_GRAPH_SPEC.md` §4 defines them - Character Genome composes them by
-reference, never by embedding a copy.
+reference (`GenomeReference`, §3.7-3.9), never by embedding a copy, per the
+universal Genome Composition Rule (`CREATIVE_GRAPH_SPEC.md` §4.1).
 
 ## 0. Philosophy
 
 A Character Genome is **not** a character sheet. It is the canonical
 representation of a character used by every department. Every department
 reads from it; no department owns a duplicate copy; it evolves only through
-approved reviews (recorded in `ReviewGraph`, `CREATIVE_GRAPH_SPEC.md` §6).
+approved reviews (recorded in `ReviewGraph`, `CREATIVE_GRAPH_SPEC.md` §7).
+
+**Owning department:** Character (`CREATIVE_GRAPH_SPEC.md` §4.2). Only the
+Character Department may write to `CharacterGenome` - every other department
+listed in §4 below writes only to the one sub-genome it independently owns
+(`DialogueGenome`, `VisualGenome`, `CostumeGenome`), never to `CharacterGenome`
+itself.
+
+**Reusable across projects** (`CREATIVE_GRAPH_SPEC.md` §4.4): a
+`CharacterGenome` carries no `project_id`. The same genome ("Hanuman") may be
+referenced by `Character` nodes in multiple projects - a feature film, a
+sequel, a marketing campaign - without duplication. This is exactly why
+Production/cost data does not live on the genome (§3.12 below) - embedding
+project-specific cost data would make the genome non-portable.
 
 **Naming split (deliberate, not an inconsistency):**
 - **UI (Director Studio):** "Character Bible" - filmmakers already understand this term.
@@ -42,14 +56,20 @@ CharacterGenome
 ├── Narrative             (new in v1.1)
 ├── Relationship          (new in v1.1 - becomes CreativeKnowledgeGraph edges, §5)
 ├── Performance           (new in v1.1)
-├── visual_genome_ref: UUID | None      → VisualGenome (referenced, not embedded)
-├── dialogue_genome_ref: UUID | None    → DialogueGenome (referenced, not embedded)
-├── costume_genome_ref: UUID | None     → CostumeGenome (referenced, not embedded)
+├── visual_genome_ref: GenomeReference | None      → VisualGenome (v1.2: was bare UUID)
+├── dialogue_genome_ref: GenomeReference | None    → DialogueGenome (v1.2: was bare UUID)
+├── costume_genome_ref: GenomeReference | None     → CostumeGenome (v1.2: was bare UUID)
 ├── Behavior              (new in v1.1)
 ├── Knowledge             (new in v1.1)
-├── Production            (new in v1.1 - NAC-specific, not a filmmaking convention)
 └── VersionMetadata       (new in v1.1)
 ```
+
+`GenomeReference` (`CREATIVE_GRAPH_SPEC.md` §4.3) = `{genome_id, genome_type,
+version, status}`, not a bare UUID as originally drafted in v1.1 - this is
+what makes replay possible ("Hanuman's `VisualGenome` at version 12,
+approved" is pinned and resolvable). Production/cost data moved out of this
+document entirely in v1.2 - see §3.12 and `CREATIVE_GRAPH_SPEC.md` §6's
+`GenomeProductionRecord`.
 
 Everything the old stub covered still exists: `visual_refs` now lives inside
 the referenced `VisualGenome.style_refs`; `voice_seed` lives inside the
@@ -148,15 +168,15 @@ silence_style: str
 
 ### 3.7 Visual (by reference)
 ```
-visual_genome_ref: UUID | None    # → VisualGenome node (CREATIVE_GRAPH_SPEC.md §4)
+visual_genome_ref: GenomeReference | None    # → VisualGenome node (CREATIVE_GRAPH_SPEC.md §4.3)
 ```
 `VisualGenome` already carries `style_refs`, `negative_prompt`, `seed` -
-unchanged. Google Flow / OpenArt / Higgsfield consume the referenced node, not
-a copy on `CharacterGenome`.
+unchanged. Google Flow / OpenArt / Higgsfield consume the referenced node at
+the pinned `version`/`status`, not a copy on `CharacterGenome`.
 
 ### 3.8 Dialogue (by reference)
 ```
-dialogue_genome_ref: UUID | None  # → DialogueGenome node (CREATIVE_GRAPH_SPEC.md §4)
+dialogue_genome_ref: GenomeReference | None  # → DialogueGenome node (CREATIVE_GRAPH_SPEC.md §4.3)
 ```
 `DialogueGenome` already carries `vocabulary_profile`, `speech_pattern`.
 **New optional fields added to `DialogueGenome` (MINOR bump, additive)** to
@@ -165,13 +185,15 @@ cover what the character-side design needs: `accent: str`, `language: str`,
 `speech_rhythm: str`, `catchphrases: list[str]`, `forbidden_expressions:
 list[str]`, `voice_seed: str | None` (the old stub's field, relocated here
 since it's a dialogue/voice concern, not a general character field).
-ElevenLabs / XTTS / Kokoro consume the referenced node.
+ElevenLabs / XTTS / Kokoro consume the referenced node. `DialogueGenome` is
+owned by the Dialogue Department (`CREATIVE_GRAPH_SPEC.md` §4.2) - Character
+Department may reference it but never write to it.
 
 ### 3.9 Costume (by reference)
 ```
-costume_genome_ref: UUID | None   # → CostumeGenome node (CREATIVE_GRAPH_SPEC.md §4)
+costume_genome_ref: GenomeReference | None   # → CostumeGenome node (CREATIVE_GRAPH_SPEC.md §4.3)
 ```
-Unchanged: `palette`, `material_refs`.
+Unchanged: `palette`, `material_refs`. Owned by the Costume Department.
 
 ### 3.10 Behavior
 ```
@@ -203,28 +225,24 @@ religion: str | None
 culture: str | None
 ```
 
-### 3.12 Production (NAC-specific, not a filmmaking convention)
-```
-approved: bool
-review_status: str              # matches ReviewGraph verdict values
-version: int
-last_updated: datetime
-generated_assets: list[AssetRef]
-voice_assets: list[AssetRef]
-image_assets: list[AssetRef]
-prompt_assets: list[AssetRef]
-scene_usage: list[scene_id]
-shot_usage: list[shot_id]
-estimated_cost_usd: float
-estimated_tokens: int
-gpu_time_s: float
-```
+### 3.12 Production - moved to ProductionGraph (v1.2 change)
+
+v1.1 drafted a Production field group directly on `CharacterGenome`. **v1.2
+moves this out entirely** to `CREATIVE_GRAPH_SPEC.md` §6's
+`GenomeProductionRecord`, keyed by `(project_id, genome_id)` rather than
+embedded on the genome. Rationale (`CREATIVE_GRAPH_SPEC.md` §4.4): a genome is
+reusable across projects and carries no `project_id`; cost/GPU-time/asset
+usage is inherently project-specific (the same Hanuman genome costs different
+tokens to render in "Temple of Varuna" vs. a marketing campaign), so embedding
+it here would make the genome non-portable. `review_status`/`approved`
+likewise already live in `ReviewGraph` (§7) - `CharacterGenome` does not
+duplicate them.
 
 ### 3.13 Version Metadata
 Enables replay, matching `CREATIVE_GRAPH_SPEC.md`'s provenance/replay
 principles (Manifesto principle 8).
 ```
-genome_version: str             # this document's version, e.g. "1.1"
+genome_version: str             # this document's version, e.g. "1.2"
 created_by: str
 created_at: datetime
 updated_at: datetime
@@ -236,21 +254,26 @@ content_hash: str               # sha256, for replay/diffing
 
 ## 4. Write authority
 
+Per the Genome Composition Rule (`CREATIVE_GRAPH_SPEC.md` §4.1, point 6): only
+the owning department may modify a genome. Applied here:
+
 | Department | Reads | Writes |
 |---|---|---|
-| Story | Character Genome | Narrative section only |
-| Character | Character Genome | Everything (full authority) |
-| Dialogue | Character Genome | `dialogue_genome_ref` target only |
-| Cinematography | Character Genome | `visual_genome_ref` target only |
-| Audio (Narration/Music/Sound Design) | Character Genome | Voice-related fields inside `DialogueGenome` only |
-| Marketing | Character Genome | Prompt variants (derived, not persisted back to the genome) |
-| Production | Character Genome | Production section only |
+| Story | CharacterGenome | Narrative section only (still Character-owned data - Story's write is scoped by convention/review, not by the Composition Rule, since Story does not *own* CharacterGenome) |
+| Character | CharacterGenome | Everything (owning department, full authority) |
+| Dialogue | CharacterGenome (via `dialogue_genome_ref`) | `DialogueGenome` only (Dialogue owns `DialogueGenome`, not `CharacterGenome` - §4.2) |
+| Cinematography | CharacterGenome (via `visual_genome_ref`) | `VisualGenome` only (Cinematography owns `VisualGenome` - §4.2) |
+| Costume | CharacterGenome (via `costume_genome_ref`) | `CostumeGenome` only (Costume owns `CostumeGenome` - §4.2) |
+| Marketing | CharacterGenome | Prompt variants (derived output, never persisted back to any genome) |
+| Production | - | Nothing on this genome - production data lives entirely in `ProductionGraph`'s `GenomeProductionRecord` (§3.12), which Production owns |
 
-Only the Character Department has full write authority over the genome.
-Every other department's write is scoped to the one referenced sub-genome or
-section it owns, and every write is subject to `ReviewGraph` approval - this
-mirrors `CREATIVE_GRAPH_SPEC.md`'s existing separation-of-concerns rule (§1)
-rather than introducing a new enforcement mechanism.
+The Story row is the one exception worth calling out: it is not a genome
+*owner* per §4.2, but is granted a narrow, review-gated write to the
+Narrative section by convention (consistent with Story's role compiling the
+Story Bible from character arcs). If this proves confusing in practice, the
+cleaner long-term fix is a dedicated `NarrativeGenome` owned by Story and
+referenced from `CharacterGenome` - not built now, flagged for Sprint 2C+ if
+the Location/Story department work reveals it's needed.
 
 ## 5. Relationship Genome → graph edges
 
@@ -279,16 +302,28 @@ Scenes, camera, lighting, music, editing, timeline, shot lists.
 | `visual_genome_ref` → VisualGenome | Google Flow, OpenArt, Higgsfield packs |
 | `dialogue_genome_ref` → DialogueGenome | ElevenLabs, XTTS, Kokoro |
 | `costume_genome_ref` → CostumeGenome | Wardrobe/asset-generation prompts |
-| Production | Production Department dashboards, cost prediction |
+| Production (via `GenomeProductionRecord`, `CREATIVE_GRAPH_SPEC.md` §6) | Production Department dashboards, cost prediction - not consumed from this document |
 
 ## 8. Migration from graph-spec 1.0's `CharacterGenome` stub
 
-| Old field (graph-spec 1.0) | New location (graph-spec 1.1) |
+| Old field (graph-spec 1.0) | New location (graph-spec 1.2) |
 |---|---|
-| `visual_refs: list[AssetRef]` | Moved into the referenced `VisualGenome.style_refs` - `CharacterGenome` now holds `visual_genome_ref` pointing to it |
+| `visual_refs: list[AssetRef]` | Moved into the referenced `VisualGenome.style_refs` - `CharacterGenome` now holds `visual_genome_ref: GenomeReference` pointing to it |
 | `voice_seed: str` | Moved into the referenced `DialogueGenome.voice_seed` (new field, §3.8) |
 | `personality_traits: dict` | Superseded by the structured Psychological section (§3.3); a free-form `dict` remains acceptable as a legacy/unmigrated fallback for exactly one MINOR version, per `VERSIONING_POLICY.md`'s backward-compatibility rule |
 
 No project on graph-spec 1.0 breaks: `character_id` stays the join key, old
 fields are still readable, and none of the three old fields were removed -
 only relocated to the reference targets they conceptually belonged to.
+
+## 9. Migration from v1.1 draft (never merged - this document's own history)
+
+| v1.1 draft | v1.2 (this frozen version) |
+|---|---|
+| `visual_genome_ref: UUID \| None` | `GenomeReference` (`{genome_id, genome_type, version, status}`) - §4.3 |
+| `dialogue_genome_ref: UUID \| None` | `GenomeReference` |
+| `costume_genome_ref: UUID \| None` | `GenomeReference` |
+| §3.12 Production field group embedded on `CharacterGenome` | Moved to `CREATIVE_GRAPH_SPEC.md` §6 `GenomeProductionRecord`, keyed by `(project_id, genome_id)` |
+
+v1.1 was never merged to `master` - this table exists for the record, not
+because any shipped project depends on the v1.1 shape.
